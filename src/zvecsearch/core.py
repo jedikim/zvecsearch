@@ -1,26 +1,18 @@
-"""ZvecSearch - Core orchestrator tying together scanning, chunking, embedding, and storage.
+"""ZvecSearch - Core orchestrator for markdown semantic search.
 
-Provides the main ZvecSearch class that coordinates:
-- File discovery via scanner.scan_paths
-- Markdown chunking via chunker.chunk_markdown
-- Embedding via configurable embedding providers
-- Vector storage via ZvecStore
-- Incremental indexing with stale chunk cleanup
-- Hybrid search (dense + BM25)
-- Memory compaction via LLM summarization
-- File watching for automatic re-indexing
+Simplified flow: scan -> chunk -> store (store owns embedding).
+index() and search() are synchronous — zvec embedding is sync.
+compact() stays async for LLM calls.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import date
 from pathlib import Path
 from typing import Callable
 
-from zvecsearch.chunker import Chunk, chunk_markdown, compute_chunk_id
+from zvecsearch.chunker import chunk_markdown, compute_chunk_id
 from zvecsearch.compact import compact_chunks
-from zvecsearch.embeddings import get_provider
 from zvecsearch.scanner import ScannedFile, scan_paths
 from zvecsearch.store import ZvecStore
 from zvecsearch.watcher import FileWatcher
@@ -31,46 +23,61 @@ logger = logging.getLogger(__name__)
 class ZvecSearch:
     """Core orchestrator for semantic memory search.
 
-    Ties together file scanning, markdown chunking, embedding, and vector
-    storage into a single high-level API.
+    Ties together file scanning, markdown chunking, and zvec-native storage.
+    Store owns embedding — callers pass text, store handles vectorization.
 
     Args:
         paths: Directories or files to scan for markdown content.
-        embedding_provider: Name of the embedding provider (e.g., "openai", "ollama").
-        embedding_model: Model name override for the embedding provider.
         zvec_path: Path to the zvec database directory.
         collection: Name of the zvec collection.
+        embedding_provider: zvec embedding provider.
+        embedding_model: Embedding model name.
         max_chunk_size: Maximum character size for a single chunk.
-        overlap_lines: Number of overlap lines when splitting large sections.
-        index_metric: Distance metric for HNSW index ("cosine", "l2", "ip").
+        overlap_lines: Number of overlap lines when splitting.
+        enable_mmap: Enable memory-mapped I/O.
+        hnsw_m: HNSW max connections per node.
         hnsw_ef: HNSW ef_construction parameter.
-        hnsw_max_m: HNSW max_m parameter.
+        quantize_type: Vector quantization type.
+        query_ef: HNSW search-time ef.
+        reranker: Reranking strategy ("rrf" or "weighted").
+        dense_weight: Dense vector weight for weighted reranker.
+        sparse_weight: Sparse vector weight for weighted reranker.
     """
 
     def __init__(
         self,
-        paths: list[str | Path],
-        embedding_provider: str = "openai",
-        embedding_model: str | None = None,
+        paths: list[str | Path] | None = None,
         zvec_path: str = "~/.zvecsearch/db",
         collection: str = "zvecsearch_chunks",
+        embedding_provider: str = "openai",
+        embedding_model: str = "text-embedding-3-small",
         max_chunk_size: int = 1500,
         overlap_lines: int = 2,
-        index_metric: str = "cosine",
+        enable_mmap: bool = True,
+        hnsw_m: int = 16,
         hnsw_ef: int = 300,
-        hnsw_max_m: int = 16,
+        quantize_type: str = "int8",
+        query_ef: int = 300,
+        reranker: str = "rrf",
+        dense_weight: float = 1.0,
+        sparse_weight: float = 0.8,
     ):
-        self._paths = [Path(p) for p in paths]
+        self._paths = [Path(p) for p in (paths or [])]
         self._max_chunk_size = max_chunk_size
         self._overlap_lines = overlap_lines
-        self._embedder = get_provider(embedding_provider, embedding_model)
         self._store = ZvecStore(
             path=zvec_path,
             collection=collection,
-            dimension=self._embedder.dimension,
-            index_metric=index_metric,
+            embedding_provider=embedding_provider,
+            embedding_model=embedding_model,
+            enable_mmap=enable_mmap,
+            hnsw_m=hnsw_m,
             hnsw_ef=hnsw_ef,
-            hnsw_max_m=hnsw_max_m,
+            quantize_type=quantize_type,
+            query_ef=query_ef,
+            reranker=reranker,
+            dense_weight=dense_weight,
+            sparse_weight=sparse_weight,
         )
 
     @property
@@ -78,15 +85,11 @@ class ZvecSearch:
         """Access the underlying ZvecStore instance."""
         return self._store
 
-    async def index(self, force: bool = False) -> int:
-        """Scan all configured paths and index discovered markdown files.
-
-        Performs incremental indexing by default: only new or changed chunks
-        are embedded and stored. Stale chunks (from modified/deleted content)
-        are automatically cleaned up.
+    def index(self, force: bool = False) -> int:
+        """Scan and index markdown files. Synchronous — store handles embedding.
 
         Args:
-            force: If True, re-embed all chunks regardless of existing state.
+            force: If True, re-embed all chunks (uses insert, faster).
 
         Returns:
             Total number of new/updated chunks indexed.
@@ -94,10 +97,12 @@ class ZvecSearch:
         files = scan_paths(self._paths)
         total = 0
         for f in files:
-            total += await self._index_file(f, force=force)
+            total += self._index_file(f, force=force)
+        self._store.flush()
+        self._store.optimize()
         return total
 
-    async def index_file(self, path: str | Path) -> int:
+    def index_file(self, path: str | Path) -> int:
         """Index a single file by path.
 
         Args:
@@ -109,18 +114,12 @@ class ZvecSearch:
         path = Path(path).resolve()
         st = path.stat()
         f = ScannedFile(path=path, mtime=st.st_mtime, size=st.st_size)
-        return await self._index_file(f)
+        n = self._index_file(f)
+        self._store.flush()
+        return n
 
-    async def _index_file(self, f: ScannedFile, force: bool = False) -> int:
-        """Internal: chunk, diff, embed, and store a single scanned file.
-
-        Args:
-            f: ScannedFile to process.
-            force: If True, skip diffing and re-embed everything.
-
-        Returns:
-            Number of chunks embedded and stored.
-        """
+    def _index_file(self, f: ScannedFile, force: bool = False) -> int:
+        """Chunk, diff, and store a single file. Store handles embedding."""
         text = f.path.read_text(encoding="utf-8", errors="replace")
         chunks = chunk_markdown(
             text,
@@ -131,77 +130,51 @@ class ZvecSearch:
         if not chunks:
             return 0
 
-        model = self._embedder.model_name
-        new_ids = {
-            compute_chunk_id(c.source, c.start_line, c.end_line, c.content_hash, model): c
+        chunk_dicts = [
+            {
+                "chunk_hash": compute_chunk_id(
+                    c.source, c.start_line, c.end_line, c.content_hash, "zvec"
+                ),
+                "content": c.content,
+                "source": c.source,
+                "heading": c.heading,
+                "heading_level": c.heading_level,
+                "start_line": c.start_line,
+                "end_line": c.end_line,
+            }
             for c in chunks
-        }
+        ]
 
-        if not force:
-            # Incremental: remove stale chunks and skip existing ones
-            old_hashes = self._store.hashes_by_source(str(f.path))
-            stale = old_hashes - set(new_ids.keys())
-            if stale:
-                self._store.delete_by_hashes(list(stale))
-
-            existing = self._store.existing_hashes(list(new_ids.keys()))
-            to_embed = {k: v for k, v in new_ids.items() if k not in existing}
-        else:
-            # Force: delete everything for this source and re-embed
+        if force:
             self._store.delete_by_source(str(f.path))
-            to_embed = new_ids
+            return self._store.embed_and_insert(chunk_dicts)
 
-        if not to_embed:
+        # Incremental: remove stale, skip existing
+        new_ids = {d["chunk_hash"] for d in chunk_dicts}
+        old_hashes = self._store.hashes_by_source(str(f.path))
+        stale = old_hashes - new_ids
+        if stale:
+            self._store.delete_by_hashes(list(stale))
+
+        existing = self._store.existing_hashes(list(new_ids))
+        to_store = [d for d in chunk_dicts if d["chunk_hash"] not in existing]
+
+        if not to_store:
             return 0
 
-        return await self._embed_and_store(list(to_embed.items()))
+        return self._store.embed_and_upsert(to_store)
 
-    async def _embed_and_store(self, items: list[tuple[str, Chunk]]) -> int:
-        """Embed chunk texts and upsert the resulting records into the store.
-
-        Args:
-            items: List of (chunk_id, Chunk) tuples to embed and store.
-
-        Returns:
-            Number of records upserted.
-        """
-        texts = [c.content for _, c in items]
-        embeddings = await self._embedder.embed(texts)
-
-        records = []
-        for (chunk_id, chunk), embedding in zip(items, embeddings):
-            records.append({
-                "chunk_hash": chunk_id,
-                "content": chunk.content,
-                "source": chunk.source,
-                "heading": chunk.heading,
-                "heading_level": chunk.heading_level,
-                "start_line": chunk.start_line,
-                "end_line": chunk.end_line,
-                "embedding": embedding,
-            })
-
-        return self._store.upsert(records)
-
-    async def search(self, query: str, top_k: int = 10) -> list[dict]:
-        """Search for chunks semantically similar to the query.
-
-        Embeds the query text, then performs hybrid dense + BM25 search
-        via the underlying ZvecStore.
+    def search(self, query: str, top_k: int = 10) -> list[dict]:
+        """Search — store handles embedding and hybrid search.
 
         Args:
             query: Natural language search query.
-            top_k: Maximum number of results to return.
+            top_k: Maximum number of results.
 
         Returns:
             List of result dicts with content, metadata, and score.
         """
-        embeddings = await self._embedder.embed([query])
-        return self._store.search(
-            query_embedding=embeddings[0],
-            query_text=query,
-            top_k=top_k,
-        )
+        return self._store.search(query_text=query, top_k=top_k)
 
     async def compact(
         self,
@@ -211,22 +184,7 @@ class ZvecSearch:
         prompt_template: str | None = None,
         output_dir: str | None = None,
     ) -> str:
-        """Summarize indexed chunks using an LLM.
-
-        Queries chunks (optionally filtered by source), sends them to the
-        compact_chunks LLM summarizer, and optionally writes the result
-        to a dated markdown file in output_dir/memory/.
-
-        Args:
-            source: Filter chunks by source file path.
-            llm_provider: LLM provider for summarization ("openai", "anthropic", "gemini").
-            llm_model: Model name override for the LLM provider.
-            prompt_template: Custom prompt template (must contain {chunks} placeholder).
-            output_dir: If set, write the summary to output_dir/memory/YYYY-MM-DD.md.
-
-        Returns:
-            The summarized text, or empty string if no chunks found.
-        """
+        """Summarize indexed chunks using an LLM. Async — LLM calls are async."""
         if source:
             chunks = self._store.query(filter_expr=f'source == "{source}"')
         else:
@@ -251,7 +209,7 @@ class ZvecSearch:
                 if is_new:
                     fh.write(f"# {date.today()}\n")
                 fh.write(f"\n\n## Memory Compact\n\n{summary}")
-            await self.index_file(compact_file)
+            self.index_file(compact_file)
 
         return summary
 
@@ -260,21 +218,10 @@ class ZvecSearch:
         on_event: Callable[[str, str, Path], None] | None = None,
         debounce_ms: int | None = None,
     ) -> FileWatcher:
-        """Start watching configured paths for markdown file changes.
-
-        Creates a FileWatcher that automatically indexes new/modified files
-        and removes deleted files from the store.
-
-        Args:
-            on_event: Optional callback(event_type, message, path) for notifications.
-            debounce_ms: Debounce interval in milliseconds for file events.
-
-        Returns:
-            A FileWatcher instance (call .start() to begin watching).
-        """
+        """Watch paths for markdown changes and auto-index."""
         def callback(event_type: str, path: Path) -> None:
             if event_type in ("created", "modified"):
-                asyncio.run(self.index_file(path))
+                self.index_file(path)
             elif event_type == "deleted":
                 self._store.delete_by_source(str(path))
             if on_event:

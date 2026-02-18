@@ -4,6 +4,8 @@ zvec(Alibaba 임베디드 벡터 데이터베이스) 기반 시맨틱 메모리 
 
 마크다운 문서를 청킹하고 임베딩하여 하이브리드 검색(dense + sparse)을 수행한다.
 
+> Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
+
 ## 설치
 
 ```bash
@@ -107,10 +109,10 @@ zvecsearch/
 ### 하이브리드 검색
 
 ```
-쿼리 → ┌─ Dense 임베딩 (OpenAI/Gemini) → HNSW 코사인 검색
-       └─ Sparse 임베딩 (BM25)         → 역인덱스 검색
-                                          ↓
-                                    RRF ReRanker → 결과
+Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
+         +-- Sparse embedding (BM25)         -> Inverted index      --+
+                                                                      |
+                                                               RRF ReRanker -> Results
 ```
 
 - **Dense 벡터**: OpenAI `text-embedding-3-small` (1536차원) 또는 Gemini `gemini-embedding-001` (768차원)

@@ -1,6 +1,9 @@
 from pathlib import Path
 from zvecsearch.config import (
     ZvecSearchConfig,
+    ZvecConfig,
+    EmbeddingConfig,
+    SearchConfig,
     load_config_file, deep_merge, resolve_config,
     config_to_dict, get_config_value, save_config,
 )
@@ -10,10 +13,25 @@ def test_default_config():
     cfg = ZvecSearchConfig()
     assert cfg.zvec.path == "~/.zvecsearch/db"
     assert cfg.zvec.collection == "zvecsearch_chunks"
+    assert cfg.zvec.quantize_type == "int8"
+    assert cfg.zvec.hnsw_m == 16
+    assert cfg.zvec.hnsw_ef == 300
+    assert cfg.zvec.read_only is False
+    assert cfg.zvec.enable_mmap is True
+
+
+def test_embedding_config_defaults():
+    cfg = ZvecSearchConfig()
     assert cfg.embedding.provider == "openai"
-    assert cfg.chunking.max_chunk_size == 1500
-    assert cfg.index.type == "hnsw"
-    assert cfg.index.metric == "cosine"
+    assert cfg.embedding.model == "text-embedding-3-small"
+
+
+def test_search_config_defaults():
+    cfg = ZvecSearchConfig()
+    assert cfg.search.query_ef == 300
+    assert cfg.search.reranker == "rrf"
+    assert cfg.search.dense_weight == 1.0
+    assert cfg.search.sparse_weight == 0.8
 
 
 def test_load_missing_file():
@@ -41,23 +59,43 @@ def test_deep_merge_none_skipped():
     assert result == {"a": 1}
 
 
-def test_resolve_with_cli_overrides():
-    cfg = resolve_config({"zvec": {"collection": "custom"}})
-    assert cfg.zvec.collection == "custom"
+def test_resolve_config_defaults(monkeypatch, tmp_path):
+    monkeypatch.setattr("zvecsearch.config._GLOBAL_CFG", tmp_path / "global.toml")
+    monkeypatch.setattr("zvecsearch.config._PROJECT_CFG", tmp_path / "project.toml")
+    cfg = resolve_config()
     assert cfg.zvec.path == "~/.zvecsearch/db"
+    assert cfg.zvec.quantize_type == "int8"
+    assert cfg.embedding.model == "text-embedding-3-small"
+    assert cfg.search.reranker == "rrf"
+
+
+def test_resolve_config_cli_overrides(monkeypatch, tmp_path):
+    monkeypatch.setattr("zvecsearch.config._GLOBAL_CFG", tmp_path / "global.toml")
+    monkeypatch.setattr("zvecsearch.config._PROJECT_CFG", tmp_path / "project.toml")
+    cfg = resolve_config({
+        "zvec": {"quantize_type": "float16"},
+        "search": {"reranker": "weighted"},
+    })
+    assert cfg.zvec.quantize_type == "float16"
+    assert cfg.search.reranker == "weighted"
 
 
 def test_config_to_dict():
     cfg = ZvecSearchConfig()
     d = config_to_dict(cfg)
     assert d["zvec"]["path"] == "~/.zvecsearch/db"
-    assert d["index"]["type"] == "hnsw"
+    assert d["zvec"]["quantize_type"] == "int8"
+    assert "search" in d
+    assert d["search"]["reranker"] == "rrf"
+    assert d["search"]["dense_weight"] == 1.0
 
 
 def test_get_config_value():
     cfg = ZvecSearchConfig()
     assert get_config_value("zvec.collection", cfg) == "zvecsearch_chunks"
-    assert get_config_value("index.metric", cfg) == "cosine"
+    assert get_config_value("zvec.quantize_type", cfg) == "int8"
+    assert get_config_value("search.reranker", cfg) == "rrf"
+    assert get_config_value("embedding.model", cfg) == "text-embedding-3-small"
 
 
 def test_save_and_load(tmp_path):

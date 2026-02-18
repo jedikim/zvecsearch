@@ -18,43 +18,30 @@ import tomli_w
 _GLOBAL_CFG = Path("~/.zvecsearch/config.toml").expanduser()
 _PROJECT_CFG = Path(".zvecsearch.toml")
 
-DEFAULT_MODELS: dict[str, str] = {
-    "openai": "text-embedding-3-small",
-    "google": "gemini-embedding-001",
-    "voyage": "voyage-3-lite",
-    "ollama": "nomic-embed-text",
-    "local": "all-MiniLM-L6-v2",
-}
-
 
 @dataclass
 class ZvecConfig:
     path: str = "~/.zvecsearch/db"
     collection: str = "zvecsearch_chunks"
     enable_mmap: bool = True
-    max_buffer_size: int = 67108864
-
-
-@dataclass
-class IndexConfig:
-    type: str = "hnsw"
-    metric: str = "cosine"
-    quantize: str = "none"
+    read_only: bool = False
+    hnsw_m: int = 16
     hnsw_ef: int = 300
-    hnsw_max_m: int = 16
+    quantize_type: str = "int8"
 
 
 @dataclass
 class EmbeddingConfig:
     provider: str = "openai"
-    model: str = ""
+    model: str = "text-embedding-3-small"
 
 
 @dataclass
-class CompactConfig:
-    llm_provider: str = "openai"
-    llm_model: str = ""
-    prompt_file: str = ""
+class SearchConfig:
+    query_ef: int = 300
+    reranker: str = "rrf"
+    dense_weight: float = 1.0
+    sparse_weight: float = 0.8
 
 
 @dataclass
@@ -69,27 +56,34 @@ class WatchConfig:
 
 
 @dataclass
+class CompactConfig:
+    llm_provider: str = "openai"
+    llm_model: str = ""
+    prompt_file: str = ""
+
+
+@dataclass
 class ZvecSearchConfig:
     zvec: ZvecConfig = None  # type: ignore[assignment]
-    index: IndexConfig = None  # type: ignore[assignment]
     embedding: EmbeddingConfig = None  # type: ignore[assignment]
-    compact: CompactConfig = None  # type: ignore[assignment]
+    search: SearchConfig = None  # type: ignore[assignment]
     chunking: ChunkingConfig = None  # type: ignore[assignment]
     watch: WatchConfig = None  # type: ignore[assignment]
+    compact: CompactConfig = None  # type: ignore[assignment]
 
     def __post_init__(self):
         if self.zvec is None:
             self.zvec = ZvecConfig()
-        if self.index is None:
-            self.index = IndexConfig()
         if self.embedding is None:
             self.embedding = EmbeddingConfig()
-        if self.compact is None:
-            self.compact = CompactConfig()
+        if self.search is None:
+            self.search = SearchConfig()
         if self.chunking is None:
             self.chunking = ChunkingConfig()
         if self.watch is None:
             self.watch = WatchConfig()
+        if self.compact is None:
+            self.compact = CompactConfig()
 
 
 def load_config_file(path: Path | str) -> dict:
@@ -118,18 +112,14 @@ def resolve_config(cli_overrides: dict | None = None) -> ZvecSearchConfig:
     if cli_overrides:
         merged = deep_merge(merged, cli_overrides)
 
-    emb = merged.get("embedding", {})
-    if not emb.get("model"):
-        emb["model"] = DEFAULT_MODELS.get(emb.get("provider", "openai"), "")
-
     cfg = ZvecSearchConfig()
     _SECTION_MAP = {
         "zvec": (ZvecConfig, "zvec"),
-        "index": (IndexConfig, "index"),
         "embedding": (EmbeddingConfig, "embedding"),
-        "compact": (CompactConfig, "compact"),
+        "search": (SearchConfig, "search"),
         "chunking": (ChunkingConfig, "chunking"),
         "watch": (WatchConfig, "watch"),
+        "compact": (CompactConfig, "compact"),
     }
     for key, (cls, attr) in _SECTION_MAP.items():
         section = merged.get(key, {})

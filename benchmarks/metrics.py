@@ -224,6 +224,47 @@ def answer_coverage(
 
 
 # ---------------------------------------------------------------------------
+# Phase 5: Vector Search (numpy cosine similarity)
+# ---------------------------------------------------------------------------
+def cosine_search_numpy(
+    query_embedding: list[float],
+    corpus_embeddings: list[list[float]],
+    corpus_chunks: list[dict],
+    top_k: int = 10,
+) -> list[dict]:
+    """numpy 기반 코사인 유사도 검색.
+
+    L2 정규화 후 내적으로 유사도를 계산합니다.
+    zvec 없이 순수 Python으로 벡터 검색을 수행합니다.
+
+    Args:
+        query_embedding: 쿼리 벡터 (1-D).
+        corpus_embeddings: 코퍼스 벡터 리스트 (corpus_chunks와 같은 순서).
+        corpus_chunks: 청크 딕셔너리 리스트 (content, heading, chunk_hash 등).
+        top_k: 반환할 상위 결과 수.
+
+    Returns:
+        score가 추가된 청크 딕셔너리 리스트 (유사도 내림차순).
+    """
+    import numpy as np
+
+    q = np.array(query_embedding, dtype=np.float32)
+    C = np.array(corpus_embeddings, dtype=np.float32)
+
+    # L2 정규화
+    q_norm = q / (np.linalg.norm(q) + 1e-10)
+    C_norms = C / (np.linalg.norm(C, axis=1, keepdims=True) + 1e-10)
+
+    # 코사인 유사도 = 정규화 벡터 내적
+    scores = C_norms @ q_norm
+
+    # Top-K 인덱스 (내림차순)
+    top_indices = np.argsort(scores)[::-1][:top_k]
+
+    return [{**corpus_chunks[idx], "score": float(scores[idx])} for idx in top_indices]
+
+
+# ---------------------------------------------------------------------------
 # Aggregate reporting
 # ---------------------------------------------------------------------------
 def compute_retrieval_report(

@@ -7,3 +7,15 @@ build/
 .pytest_cache/
 .ruff_cache/
 *.egg
+
+# Secrets
+.env
+.env.*
+*.env
+.env.local
+.env.production
+credentials.json
+*_key.json
+
+# Embedding cache (large, reproducible)
+benchmarks/data/embeddings_cache/

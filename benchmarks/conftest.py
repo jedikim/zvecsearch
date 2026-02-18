@@ -1,7 +1,10 @@
-"""벤치마크 공통 픽스처 — Ground Truth 로드, 청킹, 키워드 기반 검색 시뮬레이션."""
+"""벤치마크 공통 픽스처 — Ground Truth 로드, 청킹, 키워드/임베딩 검색."""
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -108,3 +111,160 @@ def keyword_search(
             "score": score,
         })
     return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 5: 실제 임베딩 지원 — 캐시, 픽스처, 스킵 마커
+# ---------------------------------------------------------------------------
+_CACHE_DIR = _DATA_DIR / "embeddings_cache"
+
+# Skip markers
+requires_openai = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY"),
+    reason="OPENAI_API_KEY not set",
+)
+requires_google = pytest.mark.skipif(
+    not os.environ.get("GOOGLE_API_KEY"),
+    reason="GOOGLE_API_KEY not set",
+)
+requires_both = pytest.mark.skipif(
+    not os.environ.get("OPENAI_API_KEY") or not os.environ.get("GOOGLE_API_KEY"),
+    reason="Both OPENAI_API_KEY and GOOGLE_API_KEY required",
+)
+
+
+class EmbeddingCache:
+    """디스크 기반 JSON 캐시 — 임베딩 벡터를 저장하여 API 재호출 방지."""
+
+    def __init__(self, provider: str, model: str):
+        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        safe_name = f"{provider}__{model}".replace("/", "_")
+        self._path = _CACHE_DIR / f"{safe_name}.json"
+        self._data: dict[str, list[float]] = {}
+        if self._path.exists():
+            self._data = json.loads(self._path.read_text(encoding="utf-8"))
+
+    def _key(self, text: str) -> str:
+        return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    def get(self, text: str) -> list[float] | None:
+        return self._data.get(self._key(text))
+
+    def put(self, text: str, embedding: list[float]) -> None:
+        self._data[self._key(text)] = embedding
+
+    def save(self) -> None:
+        self._path.write_text(
+            json.dumps(self._data, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def has_all(self, texts: list[str]) -> bool:
+        return all(self.get(t) is not None for t in texts)
+
+    def get_many(self, texts: list[str]) -> list[list[float]]:
+        return [self._data[self._key(t)] for t in texts]
+
+
+async def embed_with_cache(
+    provider,
+    cache: EmbeddingCache,
+    texts: list[str],
+    batch_size: int = 32,
+    delay: float = 0.5,
+) -> list[list[float]]:
+    """캐시된 임베딩 반환, 미캐시 텍스트만 API 호출."""
+    results: dict[int, list[float]] = {}
+    uncached: list[int] = []
+
+    for i, text in enumerate(texts):
+        cached = cache.get(text)
+        if cached is not None:
+            results[i] = cached
+        else:
+            uncached.append(i)
+
+    for start in range(0, len(uncached), batch_size):
+        batch_idx = uncached[start : start + batch_size]
+        batch_texts = [texts[i] for i in batch_idx]
+        embeddings = await provider.embed(batch_texts)
+        for idx, emb in zip(batch_idx, embeddings):
+            results[idx] = emb
+            cache.put(texts[idx], emb)
+        if start + batch_size < len(uncached):
+            await asyncio.sleep(delay)
+
+    cache.save()
+    return [results[i] for i in range(len(texts))]
+
+
+def _run_async(coro):
+    """동기 컨텍스트에서 비동기 코루틴 실행."""
+    return asyncio.run(coro)
+
+
+@pytest.fixture(scope="session")
+def corpus_texts(corpus_chunks) -> list[str]:
+    """모든 청크의 content 문자열 리스트."""
+    return [c["content"] for c in corpus_chunks]
+
+
+@pytest.fixture(scope="session")
+def semantic_queries(ground_truth) -> list[dict]:
+    """시맨틱 쿼리 리스트 (키워드 검색이 실패하는 쿼리)."""
+    return ground_truth.get("semantic_queries", [])
+
+
+@pytest.fixture(scope="session")
+def all_query_texts(ground_truth, semantic_queries) -> list[str]:
+    """일반 30개 + 시맨틱 15개 쿼리 텍스트."""
+    regular = [q["question"] for q in ground_truth["queries"]]
+    semantic = [q["question"] for q in semantic_queries]
+    return regular + semantic
+
+
+def _make_embedding_fixtures(provider_name, model_name, env_var, factory):
+    """OpenAI/Google 임베딩 픽스처 팩토리."""
+
+    @pytest.fixture(scope="session")
+    def corpus_embeddings(corpus_texts):
+        cache = EmbeddingCache(provider_name, model_name)
+        if cache.has_all(corpus_texts):
+            return cache.get_many(corpus_texts)
+        if not os.environ.get(env_var):
+            pytest.skip(f"{env_var} not set and cache miss")
+        provider = factory()
+        return _run_async(embed_with_cache(provider, cache, corpus_texts))
+
+    @pytest.fixture(scope="session")
+    def query_embeddings(all_query_texts):
+        cache = EmbeddingCache(provider_name, f"{model_name}__queries")
+        if cache.has_all(all_query_texts):
+            return cache.get_many(all_query_texts)
+        if not os.environ.get(env_var):
+            pytest.skip(f"{env_var} not set and cache miss")
+        provider = factory()
+        return _run_async(embed_with_cache(provider, cache, all_query_texts))
+
+    return corpus_embeddings, query_embeddings
+
+
+def _openai_factory():
+    from zvecsearch.embeddings.openai import OpenAIEmbedding
+    return OpenAIEmbedding(model="text-embedding-3-small")
+
+
+def _google_factory():
+    from zvecsearch.embeddings.google import GoogleEmbedding
+    return GoogleEmbedding(model="gemini-embedding-001", output_dimensionality=768)
+
+
+# OpenAI 임베딩 픽스처
+openai_corpus_embeddings, openai_query_embeddings = _make_embedding_fixtures(
+    "openai", "text-embedding-3-small", "OPENAI_API_KEY", _openai_factory,
+)
+
+# Google 임베딩 픽스처
+google_corpus_embeddings, google_query_embeddings = _make_embedding_fixtures(
+    "google", "gemini-embedding-001", "GOOGLE_API_KEY", _google_factory,
+)

@@ -1,12 +1,10 @@
 """Allow running as python -m zvecsearch."""
 
+from zvecsearch.cli import cli
+
 
 def main():
-    try:
-        from zvecsearch.cli import cli
-        cli()
-    except ImportError:
-        print("CLI not yet implemented")
+    cli()
 
 
 if __name__ == "__main__":

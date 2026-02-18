@@ -31,11 +31,14 @@ if "zvec" not in sys.modules:
     _zvec_mock.CollectionSchema = MagicMock
     _zvec_mock.CollectionOption = MagicMock
     _zvec_mock.HnswIndexParam = MagicMock
+    _zvec_mock.HnswQueryParam = MagicMock
     _zvec_mock.InvertIndexParam = MagicMock
     _zvec_mock.FlatIndexParam = MagicMock
     _zvec_mock.VectorQuery = MagicMock
     _zvec_mock.RrfReRanker = MagicMock
+    _zvec_mock.WeightedReRanker = MagicMock
     _zvec_mock.BM25EmbeddingFunction = MagicMock
+    _zvec_mock.OpenAIDenseEmbedding = MagicMock
     _zvec_mock.Doc = MagicMock
     sys.modules["zvec"] = _zvec_mock
 
@@ -68,7 +71,7 @@ class TestCLIBasics:
 
 
 # ---------------------------------------------------------------------------
-# Index command
+# Index command (sync)
 # ---------------------------------------------------------------------------
 class TestCLIIndex:
     def test_index_help(self, runner):
@@ -79,7 +82,7 @@ class TestCLIIndex:
     def test_index_success(self, runner, tmp_path):
         (tmp_path / "a.md").write_text("# Hello\nContent here.")
         mock_zs = MagicMock()
-        mock_zs.index = AsyncMock(return_value=3)
+        mock_zs.index.return_value = 3
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -91,7 +94,7 @@ class TestCLIIndex:
     def test_index_force_flag(self, runner, tmp_path):
         (tmp_path / "a.md").write_text("# Test\n")
         mock_zs = MagicMock()
-        mock_zs.index = AsyncMock(return_value=1)
+        mock_zs.index.return_value = 1
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -105,7 +108,7 @@ class TestCLIIndex:
 
 
 # ---------------------------------------------------------------------------
-# Search command
+# Search command (sync)
 # ---------------------------------------------------------------------------
 class TestCLISearch:
     def test_search_help(self, runner):
@@ -115,7 +118,7 @@ class TestCLISearch:
 
     def test_search_text_output(self, runner):
         mock_zs = MagicMock()
-        mock_zs.search = AsyncMock(return_value=[
+        mock_zs.search.return_value = [
             {
                 "content": "Some matching content",
                 "source": "/tmp/test.md",
@@ -123,7 +126,7 @@ class TestCLISearch:
                 "score": 0.9234,
                 "chunk_hash": "abc123",
             },
-        ])
+        ]
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -136,9 +139,9 @@ class TestCLISearch:
 
     def test_search_json_output(self, runner):
         mock_zs = MagicMock()
-        mock_zs.search = AsyncMock(return_value=[
+        mock_zs.search.return_value = [
             {"content": "test", "source": "a.md", "score": 0.8},
-        ])
+        ]
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -150,7 +153,7 @@ class TestCLISearch:
 
     def test_search_no_results(self, runner):
         mock_zs = MagicMock()
-        mock_zs.search = AsyncMock(return_value=[])
+        mock_zs.search.return_value = []
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -160,7 +163,7 @@ class TestCLISearch:
 
     def test_search_top_k(self, runner):
         mock_zs = MagicMock()
-        mock_zs.search = AsyncMock(return_value=[])
+        mock_zs.search.return_value = []
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -170,7 +173,7 @@ class TestCLISearch:
 
     def test_search_truncates_long_content(self, runner):
         mock_zs = MagicMock()
-        mock_zs.search = AsyncMock(return_value=[
+        mock_zs.search.return_value = [
             {
                 "content": "x" * 600,
                 "source": "a.md",
@@ -178,7 +181,7 @@ class TestCLISearch:
                 "score": 0.5,
                 "chunk_hash": "hash123",
             },
-        ])
+        ]
         mock_zs.close = MagicMock()
 
         with patch("zvecsearch.core.ZvecSearch", return_value=mock_zs):
@@ -257,6 +260,26 @@ class TestCLIExpand:
 
 
 # ---------------------------------------------------------------------------
+# Optimize command
+# ---------------------------------------------------------------------------
+class TestCLIOptimize:
+    def test_optimize_help(self, runner):
+        result = runner.invoke(cli, ["optimize", "--help"])
+        assert result.exit_code == 0
+
+    def test_optimize_success(self, runner):
+        mock_store = MagicMock()
+        mock_store.optimize = MagicMock()
+        mock_store.close = MagicMock()
+
+        with patch("zvecsearch.store.ZvecStore", return_value=mock_store):
+            result = runner.invoke(cli, ["optimize"])
+            assert result.exit_code == 0
+            assert "Optimization complete" in result.output
+            mock_store.optimize.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # Stats command
 # ---------------------------------------------------------------------------
 class TestCLIStats:
@@ -310,7 +333,7 @@ class TestCLIReset:
 
 
 # ---------------------------------------------------------------------------
-# Compact command
+# Compact command (async — still uses _run)
 # ---------------------------------------------------------------------------
 class TestCLICompact:
     def test_compact_help(self, runner):
@@ -442,7 +465,6 @@ class TestCLIConfig:
     def test_config_list_resolved(self, runner):
         result = runner.invoke(cli, ["config", "list", "--resolved"])
         assert result.exit_code == 0
-        # Should contain some known config sections
         assert "embedding" in result.output or "zvec" in result.output
 
     def test_config_list_global(self, runner):
@@ -459,12 +481,11 @@ class TestCLIConfig:
         assert "openai" in result.output
 
     def test_config_set_and_get(self, runner, tmp_path, monkeypatch):
-        """config set should persist, config get should retrieve."""
         cfg_file = tmp_path / "config.toml"
         monkeypatch.setattr("zvecsearch.cli._GLOBAL_CFG", cfg_file)
         monkeypatch.setattr("zvecsearch.config._GLOBAL_CFG", cfg_file)
 
-        result = runner.invoke(cli, ["config", "set", "embedding.provider", "ollama"])
+        result = runner.invoke(cli, ["config", "set", "embedding.model", "text-embedding-3-large"])
         assert result.exit_code == 0
         assert "Set" in result.output
 

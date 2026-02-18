@@ -18,7 +18,6 @@ from .config import (
     set_config_value,
     _GLOBAL_CFG,
     _PROJECT_CFG,
-    DEFAULT_MODELS,
 )
 
 
@@ -29,7 +28,6 @@ def _run(coro):
 
 # -- CLI param name -> dotted config key mapping --
 _PARAM_MAP = {
-    "provider": "embedding.provider",
     "model": "embedding.model",
     "collection": "zvec.collection",
     "zvec_path": "zvec.path",
@@ -43,10 +41,7 @@ _PARAM_MAP = {
 
 
 def _build_cli_overrides(**kwargs) -> dict:
-    """Map flat CLI params to a nested config override dict.
-
-    Only non-None values are included (None means "not set by user").
-    """
+    """Map flat CLI params to a nested config override dict."""
     result: dict = {}
     for param, dotted_key in _PARAM_MAP.items():
         val = kwargs.get(param)
@@ -60,15 +55,31 @@ def _build_cli_overrides(**kwargs) -> dict:
 def _cfg_to_zvecsearch_kwargs(cfg: ZvecSearchConfig) -> dict:
     """Extract ZvecSearch constructor kwargs from a resolved config."""
     return {
-        "embedding_provider": cfg.embedding.provider,
-        "embedding_model": cfg.embedding.model or None,
         "zvec_path": cfg.zvec.path,
         "collection": cfg.zvec.collection,
+        "embedding_provider": cfg.embedding.provider,
+        "embedding_model": cfg.embedding.model,
         "max_chunk_size": cfg.chunking.max_chunk_size,
         "overlap_lines": cfg.chunking.overlap_lines,
-        "index_metric": cfg.index.metric,
-        "hnsw_ef": cfg.index.hnsw_ef,
-        "hnsw_max_m": cfg.index.hnsw_max_m,
+        "enable_mmap": cfg.zvec.enable_mmap,
+        "hnsw_m": cfg.zvec.hnsw_m,
+        "hnsw_ef": cfg.zvec.hnsw_ef,
+        "quantize_type": cfg.zvec.quantize_type,
+        "query_ef": cfg.search.query_ef,
+        "reranker": cfg.search.reranker,
+        "dense_weight": cfg.search.dense_weight,
+        "sparse_weight": cfg.search.sparse_weight,
+    }
+
+
+def _cfg_to_store_kwargs(cfg: ZvecSearchConfig) -> dict:
+    """Extract ZvecStore constructor kwargs for store-only commands."""
+    return {
+        "path": cfg.zvec.path,
+        "collection": cfg.zvec.collection,
+        "embedding_provider": cfg.embedding.provider,
+        "embedding_model": cfg.embedding.model,
+        "enable_mmap": cfg.zvec.enable_mmap,
     }
 
 
@@ -76,7 +87,6 @@ def _cfg_to_zvecsearch_kwargs(cfg: ZvecSearchConfig) -> dict:
 
 def _common_options(f):
     """Shared options for commands that create a ZvecSearch instance."""
-    f = click.option("--provider", "-p", default=None, help="Embedding provider.")(f)
     f = click.option("--model", "-m", default=None, help="Override embedding model.")(f)
     f = click.option("--collection", "-c", default=None, help="Zvec collection name.")(f)
     f = click.option("--zvec-path", default=None, help="Zvec database path.")(f)
@@ -102,7 +112,6 @@ def cli(ctx) -> None:
 @click.option("--force", is_flag=True, help="Re-index all files.")
 def index(
     paths: tuple[str, ...],
-    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -112,12 +121,11 @@ def index(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        provider=provider, model=model, collection=collection,
-        zvec_path=zvec_path,
+        model=model, collection=collection, zvec_path=zvec_path,
     ))
     ms = ZvecSearch(list(paths), **_cfg_to_zvecsearch_kwargs(cfg))
     try:
-        n = _run(ms.index(force=force))
+        n = ms.index(force=force)
         click.echo(f"Indexed {n} chunks.")
     finally:
         ms.close()
@@ -135,7 +143,6 @@ def index(
 def search(
     query: str,
     top_k: int | None,
-    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -145,12 +152,11 @@ def search(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        provider=provider, model=model, collection=collection,
-        zvec_path=zvec_path,
+        model=model, collection=collection, zvec_path=zvec_path,
     ))
     ms = ZvecSearch(**_cfg_to_zvecsearch_kwargs(cfg))
     try:
-        results = _run(ms.search(query, top_k=top_k or 5))
+        results = ms.search(query, top_k=top_k or 5)
         if json_output:
             click.echo(json.dumps(results, indent=2, ensure_ascii=False))
         else:
@@ -195,21 +201,13 @@ def expand(
     collection: str | None,
     zvec_path: str | None,
 ) -> None:
-    """Expand a memory chunk to show full context.
-
-    Look up CHUNK_HASH in the index, then read the source markdown file
-    to return the surrounding context (full heading section by default).
-    """
+    """Expand a memory chunk to show full context."""
     from .store import ZvecStore
 
     cfg = resolve_config(_build_cli_overrides(
         collection=collection, zvec_path=zvec_path,
     ))
-    store = ZvecStore(
-        path=cfg.zvec.path,
-        collection=cfg.zvec.collection,
-        dimension=None,
-    )
+    store = ZvecStore(**_cfg_to_store_kwargs(cfg))
     try:
         chunks = store.query(filter_expr=f'chunk_hash == "{chunk_hash}"')
         if not chunks:
@@ -231,19 +229,16 @@ def expand(
         all_lines = source_path.read_text(encoding="utf-8").splitlines()
 
         if lines is not None:
-            # Show N lines before/after the chunk
             ctx_start = max(0, start_line - 1 - lines)
             ctx_end = min(len(all_lines), end_line + lines)
             expanded = "\n".join(all_lines[ctx_start:ctx_end])
             expanded_start = ctx_start + 1
             expanded_end = ctx_end
         else:
-            # Show full section under the same heading
             expanded, expanded_start, expanded_end = _extract_section(
                 all_lines, start_line, heading_level,
             )
 
-        # Parse any anchor comments in the expanded text
         import re
         anchor_match = re.search(
             r"<!--\s*session:(\S+)\s+turn:(\S+)\s+transcript:(\S+)\s*-->",
@@ -284,13 +279,8 @@ def expand(
 def _extract_section(
     all_lines: list[str], start_line: int, heading_level: int,
 ) -> tuple[str, int, int]:
-    """Extract the full section containing the chunk.
-
-    Walks backward to find the section heading, then forward to the next
-    heading of equal or higher level (or EOF).
-    """
-    # Find section start - walk backward to the heading
-    section_start = start_line - 1  # 0-indexed
+    """Extract the full section containing the chunk."""
+    section_start = start_line - 1
     if heading_level > 0:
         for i in range(start_line - 2, -1, -1):
             line = all_lines[i]
@@ -300,7 +290,6 @@ def _extract_section(
                     section_start = i
                     break
 
-    # Find section end - walk forward to the next heading of same or higher level
     section_end = len(all_lines)
     if heading_level > 0:
         for i in range(start_line, len(all_lines)):
@@ -330,12 +319,7 @@ def transcript(
     ctx: int,
     json_output: bool,
 ) -> None:
-    """View original conversation turns from a JSONL transcript.
-
-    Parse JSONL_PATH and display conversation turns. If --turn is given,
-    show context around that specific turn; otherwise show an index of
-    all user turns.
-    """
+    """View original conversation turns from a JSONL transcript."""
     from .transcript import (
         parse_transcript,
         find_turn_context,
@@ -377,7 +361,6 @@ def transcript(
 @click.option("--debounce-ms", default=None, type=int, help="Debounce delay in ms.")
 def watch(
     paths: tuple[str, ...],
-    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -387,13 +370,12 @@ def watch(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        provider=provider, model=model, collection=collection,
+        model=model, collection=collection,
         zvec_path=zvec_path, debounce_ms=debounce_ms,
     ))
     ms = ZvecSearch(list(paths), **_cfg_to_zvecsearch_kwargs(cfg))
 
-    # Initial index
-    n = _run(ms.index())
+    n = ms.index()
     if n:
         click.echo(f"Indexed {n} chunks.")
 
@@ -432,7 +414,6 @@ def compact(
     llm_model: str | None,
     prompt: str | None,
     prompt_file: str | None,
-    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -441,7 +422,7 @@ def compact(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        provider=provider, model=model, collection=collection,
+        model=model, collection=collection,
         zvec_path=zvec_path, llm_provider=llm_provider,
         llm_model=llm_model, prompt_file=prompt_file,
     ))
@@ -469,6 +450,31 @@ def compact(
 
 
 # ======================================================================
+# Optimize command
+# ======================================================================
+
+@cli.command()
+@click.option("--collection", "-c", default=None, help="Zvec collection name.")
+@click.option("--zvec-path", default=None, help="Zvec database path.")
+def optimize(
+    collection: str | None,
+    zvec_path: str | None,
+) -> None:
+    """Optimize the index (segment merge + rebuild)."""
+    from .store import ZvecStore
+
+    cfg = resolve_config(_build_cli_overrides(
+        collection=collection, zvec_path=zvec_path,
+    ))
+    store = ZvecStore(**_cfg_to_store_kwargs(cfg))
+    try:
+        store.optimize()
+        click.echo("Optimization complete.")
+    finally:
+        store.close()
+
+
+# ======================================================================
 # Stats command
 # ======================================================================
 
@@ -486,11 +492,7 @@ def stats(
         collection=collection, zvec_path=zvec_path,
     ))
     try:
-        store = ZvecStore(
-            path=cfg.zvec.path,
-            collection=cfg.zvec.collection,
-            dimension=None,
-        )
+        store = ZvecStore(**_cfg_to_store_kwargs(cfg))
     except Exception as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
@@ -520,11 +522,7 @@ def reset(
     cfg = resolve_config(_build_cli_overrides(
         collection=collection, zvec_path=zvec_path,
     ))
-    store = ZvecStore(
-        path=cfg.zvec.path,
-        collection=cfg.zvec.collection,
-        dimension=None,
-    )
+    store = ZvecStore(**_cfg_to_store_kwargs(cfg))
     try:
         store.drop()
         click.echo("Dropped collection.")
@@ -562,18 +560,22 @@ def config_init(project: bool) -> None:
     result["zvec"]["collection"] = click.prompt(
         "  Collection name", default=current.zvec.collection,
     )
+    result["zvec"]["quantize_type"] = click.prompt(
+        "  Quantization (none/int8/int4/fp16)", default=current.zvec.quantize_type,
+    )
 
     # Embedding
     click.echo("\n-- Embedding --")
     result["embedding"] = {}
-    result["embedding"]["provider"] = click.prompt(
-        "  Provider (openai/google/voyage/ollama/local)",
-        default=current.embedding.provider,
-    )
-    _emb_provider = result["embedding"]["provider"]
-    _emb_model_default = current.embedding.model or DEFAULT_MODELS.get(_emb_provider, "")
     result["embedding"]["model"] = click.prompt(
-        "  Model", default=_emb_model_default,
+        "  Embedding model", default=current.embedding.model,
+    )
+
+    # Search
+    click.echo("\n-- Search --")
+    result["search"] = {}
+    result["search"]["reranker"] = click.prompt(
+        "  Reranker (rrf/weighted)", default=current.search.reranker,
     )
 
     # Chunking
@@ -622,7 +624,7 @@ def config_init(project: bool) -> None:
 @click.argument("value")
 @click.option("--project", is_flag=True, help="Write to project config.")
 def config_set(key: str, value: str, project: bool) -> None:
-    """Set a config value (e.g. zvecsearch config set embedding.provider ollama)."""
+    """Set a config value (e.g. zvecsearch config set embedding.model text-embedding-3-large)."""
     try:
         set_config_value(key, value, project=project)
         target = _PROJECT_CFG if project else _GLOBAL_CFG
@@ -635,7 +637,7 @@ def config_set(key: str, value: str, project: bool) -> None:
 @config_group.command("get")
 @click.argument("key")
 def config_get(key: str) -> None:
-    """Get a resolved config value (e.g. zvecsearch config get embedding.provider)."""
+    """Get a resolved config value (e.g. zvecsearch config get embedding.model)."""
     try:
         val = get_config_value(key)
         click.echo(val)

@@ -1,9 +1,6 @@
 from pathlib import Path
 from zvecsearch.config import (
     ZvecSearchConfig,
-    ZvecConfig,
-    EmbeddingConfig,
-    SearchConfig,
     load_config_file, deep_merge, resolve_config,
     config_to_dict, get_config_value, save_config,
 )

@@ -8,15 +8,13 @@
 - 증분 인덱싱 정확성 (수정/삭제/추가)
 - 해시 충돌 없음 검증
 - 청킹 경계 조건 (매우 긴 줄, 빈 섹션, 특수 문자)
-- 전체 파이프라인 스트레스 (scan → chunk → embed → store → search)
+- 전체 파이프라인 스트레스 (scan → chunk → store → search)
 """
 from __future__ import annotations
 
 import random
 import sys
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ---------------------------------------------------------------------------
 # zvec 모듈 스텁 (네이티브 라이브러리가 AVX-512 필요)
@@ -42,6 +40,9 @@ if "zvec" not in sys.modules:
     _zvec_stub.RrfReRanker = MagicMock
     _zvec_stub.BM25EmbeddingFunction = MagicMock
     _zvec_stub.Doc = MagicMock
+    _zvec_stub.WeightedReRanker = MagicMock
+    _zvec_stub.HnswQueryParam = MagicMock
+    _zvec_stub.OpenAIDenseEmbedding = MagicMock
     sys.modules["zvec"] = _zvec_stub
 
 from zvecsearch.chunker import Chunk, chunk_markdown, compute_chunk_id  # noqa: E402
@@ -78,7 +79,14 @@ def _make_stateful_store() -> MagicMock:
             store._docs[c["chunk_hash"]] = c
         return len(chunks)
 
-    store.upsert.side_effect = _upsert
+    store.embed_and_upsert.side_effect = _upsert
+
+    def _insert(chunks):
+        for c in chunks:
+            store._docs[c["chunk_hash"]] = c
+        return len(chunks)
+
+    store.embed_and_insert.side_effect = _insert
     store.count.side_effect = lambda: len(store._docs)
 
     def _hashes_by_source(source):
@@ -104,7 +112,7 @@ def _make_stateful_store() -> MagicMock:
 
     store.delete_by_source.side_effect = _delete_by_source
 
-    def _search(query_embedding, query_text="", top_k=10, filter_expr=""):
+    def _search(query_text="", top_k=10):
         results = list(store._docs.values())[:top_k]
         return [
             {
@@ -123,33 +131,9 @@ def _make_stateful_store() -> MagicMock:
     store.search.side_effect = _search
     store.close.return_value = None
     store.drop.return_value = None
+    store.flush.return_value = None
+    store.optimize.return_value = None
     return store
-
-
-class FakeEmbedder:
-    """Mock 오염을 피하기 위한 순수 Python 임베딩 제공자.
-
-    test_store.py의 BM25 Mock이 MagicMock 클래스를 오염시키므로,
-    AsyncMock 대신 순수 클래스를 사용하여 완전히 격리.
-    """
-
-    def __init__(self, dim: int = TEST_DIM):
-        self.model_name = "stress-test-model"
-        self.dimension = dim
-        self._dim = dim
-        self._embed_calls: list[list[str]] = []
-        self._custom_return = None
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        self._embed_calls.append(texts)
-        if self._custom_return is not None:
-            return self._custom_return
-        return [[float(i + 1) * 0.1] * self._dim for i, _ in enumerate(texts)]
-
-
-def _make_embedder(dim: int = TEST_DIM) -> FakeEmbedder:
-    """결정적 벡터를 반환하는 임베딩 제공자."""
-    return FakeEmbedder(dim=dim)
 
 
 # ---------------------------------------------------------------------------
@@ -551,22 +535,23 @@ class TestConfigStress:
         save_config(original, f)
         loaded = load_config_file(f)
         # 모든 최상위 키가 존재해야 함
-        for key in ["zvec", "index", "embedding", "compact", "chunking", "watch"]:
+        for key in ["zvec", "search", "embedding", "compact", "chunking", "watch"]:
             assert key in loaded
 
     def test_resolve_with_many_overrides(self):
         """여러 설정 값을 동시에 오버라이드."""
         cfg = resolve_config({
-            "zvec": {"path": "/custom/path", "collection": "custom_col"},
-            "index": {"metric": "l2", "hnsw_ef": 500},
+            "zvec": {"path": "/custom/path", "collection": "custom_col", "hnsw_ef": 500},
+            "search": {"query_ef": 500, "reranker": "weighted"},
             "embedding": {"provider": "ollama", "model": "custom-model"},
             "chunking": {"max_chunk_size": 3000, "overlap_lines": 5},
             "watch": {"debounce_ms": 3000},
         })
         assert cfg.zvec.path == "/custom/path"
         assert cfg.zvec.collection == "custom_col"
-        assert cfg.index.metric == "l2"
-        assert cfg.index.hnsw_ef == 500
+        assert cfg.zvec.hnsw_ef == 500
+        assert cfg.search.query_ef == 500
+        assert cfg.search.reranker == "weighted"
         assert cfg.embedding.provider == "ollama"
         assert cfg.embedding.model == "custom-model"
         assert cfg.chunking.max_chunk_size == 3000
@@ -579,10 +564,11 @@ class TestConfigStress:
             ("zvec.path", "~/.zvecsearch/db"),
             ("zvec.collection", "zvecsearch_chunks"),
             ("zvec.enable_mmap", True),
-            ("index.type", "hnsw"),
-            ("index.metric", "cosine"),
-            ("index.hnsw_ef", 300),
-            ("index.hnsw_max_m", 16),
+            ("zvec.hnsw_m", 16),
+            ("zvec.hnsw_ef", 300),
+            ("zvec.quantize_type", "int8"),
+            ("search.query_ef", 300),
+            ("search.reranker", "rrf"),
             ("embedding.provider", "openai"),
             ("chunking.max_chunk_size", 1500),
             ("chunking.overlap_lines", 2),
@@ -605,8 +591,7 @@ class TestConfigStress:
 class TestLargePipelineStress:
     """대규모 데이터를 사용한 전체 파이프라인 테스트."""
 
-    @pytest.mark.asyncio
-    async def test_index_50_files(self, tmp_path):
+    def test_index_50_files(self, tmp_path):
         """50개 파일을 인덱싱하고 검색."""
         # 50개 마크다운 파일 생성
         for i in range(LARGE_FILE_COUNT):
@@ -617,24 +602,20 @@ class TestLargePipelineStress:
             (tmp_path / f"doc_{i:03d}.md").write_text(content)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count == LARGE_FILE_COUNT  # 각 파일 1 청크
             assert store.count() == LARGE_FILE_COUNT
 
             # 검색
-            emb._custom_return = [[0.5] * TEST_DIM]
-            results = await zs.search("AI 벡터검색", top_k=10)
+            results = zs.search("AI 벡터검색", top_k=10)
             assert len(results) <= 10
             assert all("content" in r for r in results)
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_index_files_with_many_chunks(self, tmp_path):
+    def test_index_files_with_many_chunks(self, tmp_path):
         """큰 파일에서 수백 개의 청크가 생성되는 파이프라인."""
         big_md = _generate_large_markdown(
             num_headings=30, paragraphs_per_heading=2, words_per_paragraph=50
@@ -642,58 +623,48 @@ class TestLargePipelineStress:
         (tmp_path / "big.md").write_text(big_md)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count >= 30  # 최소 30개 청크
-            # 임베딩 호출이 실제로 발생했는지 확인
-            assert len(emb._embed_calls) >= 1
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_incremental_index_add_files(self, tmp_path):
+    def test_incremental_index_add_files(self, tmp_path):
         """파일 추가 후 증분 인덱싱."""
         (tmp_path / "initial.md").write_text("# Initial\nFirst document.")
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             # 첫 인덱싱
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 == 1
 
             # 파일 추가
             (tmp_path / "added.md").write_text("# Added\nSecond document.")
 
             # 두 번째 인덱싱 - 새 파일만 인덱싱
-            count2 = await zs.index()
+            count2 = zs.index()
             assert count2 == 1  # 새 파일만
             assert store.count() == 2  # 총 2개
 
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_incremental_index_modify_file(self, tmp_path):
+    def test_incremental_index_modify_file(self, tmp_path):
         """파일 수정 후 증분 인덱싱이 올바르게 작동하는지 검증."""
         file_path = tmp_path / "changeable.md"
         file_path.write_text("# Version 1\nOriginal content.")
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             # 첫 인덱싱
-            await zs.index()
+            zs.index()
             initial_count = store.count()
             assert initial_count == 1
 
@@ -701,73 +672,62 @@ class TestLargePipelineStress:
             file_path.write_text("# Version 2\nModified content with new info.")
 
             # 두 번째 인덱싱 - 변경된 청크가 업데이트됨
-            count2 = await zs.index()
+            count2 = zs.index()
             assert count2 == 1  # 새 청크 1개
             # 이전 해시가 삭제되고 새 해시가 추가됨
             assert store.count() == 1
 
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_force_reindex_large_dataset(self, tmp_path):
+    def test_force_reindex_large_dataset(self, tmp_path):
         """대규모 데이터셋의 강제 재인덱싱."""
         for i in range(20):
             (tmp_path / f"doc_{i}.md").write_text(f"# Doc {i}\nContent for doc {i}.")
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             # 첫 인덱싱
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 == 20
 
             # 강제 재인덱싱
-            count2 = await zs.index(force=True)
+            count2 = zs.index(force=True)
             assert count2 == 20  # 모든 청크 재인덱싱
             assert store.count() == 20
 
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_search_top_k_variations(self, tmp_path):
+    def test_search_top_k_variations(self, tmp_path):
         """다양한 top_k 값으로 검색."""
         for i in range(30):
             (tmp_path / f"doc_{i}.md").write_text(f"# Doc {i}\nContent about topic {i}.")
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
-
-            emb._custom_return = [[0.5] * TEST_DIM]
+            zs.index()
 
             for k in [1, 3, 5, 10, 20, 50]:
-                results = await zs.search("topic", top_k=k)
+                results = zs.search("topic", top_k=k)
                 assert len(results) <= k
                 assert all(isinstance(r["score"], float) for r in results)
 
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_unicode_content_pipeline(self, tmp_path):
+    def test_unicode_content_pipeline(self, tmp_path):
         """유니코드 콘텐츠의 전체 파이프라인."""
         (tmp_path / "korean.md").write_text(_generate_unicode_markdown())
         (tmp_path / "complex.md").write_text(_generate_complex_nested_markdown())
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count >= 10  # 두 파일에서 최소 10개 청크
 
             # 유니코드 콘텐츠가 정상 저장되었는지 확인
@@ -777,14 +737,11 @@ class TestLargePipelineStress:
 
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_multiple_index_search_cycles(self, tmp_path):
+    def test_multiple_index_search_cycles(self, tmp_path):
         """인덱싱-검색 사이클을 여러 번 반복."""
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             for cycle in range(5):
@@ -794,12 +751,11 @@ class TestLargePipelineStress:
                 )
 
                 # 인덱싱
-                count = await zs.index()
+                count = zs.index()
                 assert count == 1  # 매번 새 파일 1개만
 
                 # 검색
-                emb._custom_return = [[0.5] * TEST_DIM]
-                results = await zs.search("cycle", top_k=50)
+                results = zs.search("cycle", top_k=50)
                 assert len(results) == cycle + 1  # 누적
 
             assert store.count() == 5
@@ -867,7 +823,7 @@ class TestCLIStress:
         runner = CliRunner()
         result = runner.invoke(cli, ["config", "list", "--resolved"])
         assert result.exit_code == 0
-        for section in ["zvec", "index", "embedding", "compact", "chunking", "watch"]:
+        for section in ["zvec", "search", "embedding", "compact", "chunking", "watch"]:
             assert section in result.output
 
     def test_help_for_all_commands(self):
@@ -877,7 +833,7 @@ class TestCLIStress:
 
         runner = CliRunner()
         commands = ["index", "search", "watch", "compact", "stats",
-                     "reset", "expand", "transcript", "config"]
+                     "reset", "expand", "transcript", "config", "optimize"]
         for cmd in commands:
             result = runner.invoke(cli, [cmd, "--help"])
             assert result.exit_code == 0, f"'{cmd} --help' 실패: {result.output}"

@@ -1,25 +1,22 @@
 """Integration tests for the full zvecsearch pipeline.
 
-Tests the end-to-end flow: scan -> chunk -> embed -> store -> search.
-Uses mocked zvec backend (AVX-512 unavailable) and mocked embedding provider.
+Tests the end-to-end flow: scan -> chunk -> store (with internal embedding) -> search.
+The store handles embedding internally via zvec-native functions; no external
+embedding provider is used.
 
 The store mock is stateful (in-memory dict) to allow real incremental-index
 logic (hashes_by_source, existing_hashes, delete_by_hashes, etc.) to work
-correctly.  The embedder mock is an AsyncMock that returns deterministic
-vectors so assertions are stable.
+correctly.  All index/search APIs are synchronous.
 
 Mocking strategy follows test_core.py: install a fake zvec in sys.modules
-before importing any zvecsearch code, then mock both ZvecStore and the
-embedding provider with patch() for every test.
-
-asyncio_mode = "auto" (set in pyproject.toml) means all async def tests
-are executed automatically without extra markers.
+before importing any zvecsearch code, then mock ZvecStore with patch() for
+every test.
 """
 from __future__ import annotations
 
 import sys
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Install a zvec stub in sys.modules so that store.py can import it even
@@ -46,32 +43,18 @@ if "zvec" not in sys.modules:
     _zvec_stub.RrfReRanker = MagicMock
     _zvec_stub.BM25EmbeddingFunction = MagicMock
     _zvec_stub.Doc = MagicMock
+    _zvec_stub.WeightedReRanker = MagicMock
+    _zvec_stub.HnswQueryParam = MagicMock
+    _zvec_stub.OpenAIDenseEmbedding = MagicMock
     sys.modules["zvec"] = _zvec_stub
 
 from zvecsearch.core import ZvecSearch  # noqa: E402
 from zvecsearch.chunker import chunk_markdown, compute_chunk_id  # noqa: E402
 
-# ---------------------------------------------------------------------------
-# Constants
-# ---------------------------------------------------------------------------
-TEST_DIM = 4
-
 
 # ---------------------------------------------------------------------------
 # Mock factories
 # ---------------------------------------------------------------------------
-
-def _make_embedder(dim: int = TEST_DIM) -> AsyncMock:
-    """Return a mock async embedding provider that returns deterministic vectors."""
-    mock_emb = AsyncMock()
-    mock_emb.model_name = "test-model"
-    mock_emb.dimension = dim
-    # Return a unique deterministic embedding per text (based on index)
-    mock_emb.embed.side_effect = lambda texts: [
-        [float(i + 1) * 0.1] * dim for i, _ in enumerate(texts)
-    ]
-    return mock_emb
-
 
 def _make_store() -> MagicMock:
     """Return a stateful in-memory mock of ZvecStore.
@@ -83,13 +66,25 @@ def _make_store() -> MagicMock:
     store = MagicMock()
     store._docs: dict[str, dict] = {}
 
-    # --- upsert ---
+    # --- embed_and_upsert ---
     def _upsert(chunks):
         for c in chunks:
             store._docs[c["chunk_hash"]] = c
         return len(chunks)
 
-    store.upsert.side_effect = _upsert
+    store.embed_and_upsert.side_effect = _upsert
+
+    # --- embed_and_insert ---
+    def _insert(chunks):
+        for c in chunks:
+            store._docs[c["chunk_hash"]] = c
+        return len(chunks)
+
+    store.embed_and_insert.side_effect = _insert
+
+    # --- flush / optimize ---
+    store.flush.return_value = None
+    store.optimize.return_value = None
 
     # --- count ---
     store.count.side_effect = lambda: len(store._docs)
@@ -122,7 +117,7 @@ def _make_store() -> MagicMock:
     store.delete_by_source.side_effect = _delete_by_source
 
     # --- search ---
-    def _search(query_embedding, query_text="", top_k=10, filter_expr=""):
+    def _search(query_text="", top_k=10):
         results = list(store._docs.values())[:top_k]
         return [
             {
@@ -184,23 +179,19 @@ def multi_md_dir(tmp_path):
 # Helper: create a ZvecSearch with patched dependencies
 # ---------------------------------------------------------------------------
 
-def _make_zs(paths, embedder=None, store=None):
-    """Create a ZvecSearch with mocked get_provider and ZvecStore.
+def _make_zs(paths, store=None):
+    """Create a ZvecSearch with mocked ZvecStore.
 
-    Returns (zs, embedder, store, patch_stack).  Caller must stop the patch
+    Returns (zs, store, patch_stack).  Caller must stop the patch
     stack after use; using as a context manager is recommended.
     """
-    if embedder is None:
-        embedder = _make_embedder()
     if store is None:
         store = _make_store()
 
-    p1 = patch("zvecsearch.core.get_provider", return_value=embedder)
     p2 = patch("zvecsearch.core.ZvecStore", return_value=store)
-    p1.start()
     p2.start()
     zs = ZvecSearch(paths=paths, zvec_path="/tmp/unused_zvec_path")
-    return zs, embedder, store, (p1, p2)
+    return zs, store, (p2,)
 
 
 def _stop_patches(patches):
@@ -213,24 +204,23 @@ def _stop_patches(patches):
 # Index multiple files, search, verify result structure.
 # ---------------------------------------------------------------------------
 class TestFullPipeline:
-    async def test_full_pipeline_indexes_all_files(self, multi_md_dir):
+    def test_full_pipeline_indexes_all_files(self, multi_md_dir):
         """Index three files and verify at least one chunk per file is stored."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count >= 3, f"Expected >= 3 chunks from 3 files, got {count}"
             assert store.count() >= 3
-            assert embedder.embed.call_count >= 1
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_full_pipeline_search_returns_structured_results(self, md_dir):
+    def test_full_pipeline_search_returns_structured_results(self, md_dir):
         """After indexing, search() must return results with all required fields."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("machine learning", top_k=5)
+            zs.index()
+            results = zs.search("machine learning", top_k=5)
 
             assert isinstance(results, list)
             assert len(results) >= 1
@@ -244,33 +234,34 @@ class TestFullPipeline:
             zs.close()
             _stop_patches(patches)
 
-    async def test_full_pipeline_single_file(self, md_dir):
+    def test_full_pipeline_single_file(self, md_dir):
         """index() on a single-file directory stores all its chunks."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count >= 1
             assert store.count() >= 1
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_full_pipeline_embeds_correct_texts(self, md_dir):
-        """Embedder receives the actual chunk content strings."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+    def test_full_pipeline_embeds_correct_texts(self, md_dir):
+        """Store receives the actual chunk content strings via embed_and_upsert."""
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
 
-            # Collect all texts passed to embed()
-            all_texts = []
-            for call_args in embedder.embed.call_args_list:
-                all_texts.extend(call_args[0][0])
+            # Collect all chunks passed to embed_and_upsert()
+            all_contents = []
+            for call_args in store.embed_and_upsert.call_args_list:
+                chunks = call_args[0][0]
+                all_contents.extend(c["content"] for c in chunks)
 
-            # Every stored chunk's content should have been embedded
+            # Every stored chunk's content should have been passed to embed_and_upsert
             stored_contents = {c["content"] for c in store._docs.values()}
             for content in stored_contents:
-                assert any(content in t or t in content for t in all_texts), \
-                    f"Content not found in embed calls: {content[:50]!r}"
+                assert any(content in t or t in content for t in all_contents), \
+                    f"Content not found in embed_and_upsert calls: {content[:50]!r}"
         finally:
             zs.close()
             _stop_patches(patches)
@@ -281,27 +272,27 @@ class TestFullPipeline:
 # Index, modify file, re-index, verify only changed chunks re-embedded.
 # ---------------------------------------------------------------------------
 class TestIncrementalIndex:
-    async def test_second_index_skips_existing_chunks(self, md_dir):
+    def test_second_index_skips_existing_chunks(self, md_dir):
         """A second index() on unchanged files should embed 0 new chunks."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 >= 1
 
-            embedder.embed.reset_mock()
-            count2 = await zs.index()
+            store.embed_and_upsert.reset_mock()
+            count2 = zs.index()
 
             assert count2 == 0
-            embedder.embed.assert_not_called()
+            store.embed_and_upsert.assert_not_called()
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_modified_file_triggers_reembedding(self, md_dir):
+    def test_modified_file_triggers_reembedding(self, md_dir):
         """Changing a file's content causes new chunks to be embedded."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 >= 1
 
             # Replace file content entirely so all chunk IDs change
@@ -310,26 +301,26 @@ class TestIncrementalIndex:
                 "## Transformers\n\nTransformer models revolutionized NLP processing."
             )
 
-            embedder.embed.reset_mock()
-            count2 = await zs.index()
+            store.embed_and_upsert.reset_mock()
+            count2 = zs.index()
 
             assert count2 >= 1
-            embedder.embed.assert_called()
+            store.embed_and_upsert.assert_called()
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_modified_file_removes_stale_chunks(self, md_dir):
+    def test_modified_file_removes_stale_chunks(self, md_dir):
         """Old chunk hashes from a modified file must be deleted."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             old_hashes = set(store._docs.keys())
 
             (md_dir / "doc.md").write_text(
                 "# Brand New\n\nFreshly written content with completely different words."
             )
-            await zs.index()
+            zs.index()
             new_hashes = set(store._docs.keys())
 
             # Any hash that was in old but not in new should be gone
@@ -340,11 +331,11 @@ class TestIncrementalIndex:
             zs.close()
             _stop_patches(patches)
 
-    async def test_incremental_preserves_unchanged_chunks(self, multi_md_dir):
+    def test_incremental_preserves_unchanged_chunks(self, multi_md_dir):
         """When only one file changes, other files' chunks stay in the store."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            await zs.index()
+            zs.index()
 
             # Identify chunks from alpha.md
             alpha_path = str((multi_md_dir / "alpha.md").resolve())
@@ -356,7 +347,7 @@ class TestIncrementalIndex:
             (multi_md_dir / "alpha.md").write_text(
                 "# Alpha Modified\n\nCompletely rewritten alpha content."
             )
-            await zs.index()
+            zs.index()
 
             # All non-alpha chunks must still be present
             for h in other_hashes:
@@ -365,17 +356,17 @@ class TestIncrementalIndex:
             zs.close()
             _stop_patches(patches)
 
-    async def test_delete_by_hashes_called_for_stale(self, md_dir):
+    def test_delete_by_hashes_called_for_stale(self, md_dir):
         """delete_by_hashes() must be called when stale chunks are detected."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             store.delete_by_hashes.reset_mock()
 
             (md_dir / "doc.md").write_text(
                 "# Totally Different\n\nAll new content here."
             )
-            await zs.index()
+            zs.index()
 
             store.delete_by_hashes.assert_called()
         finally:
@@ -388,65 +379,62 @@ class TestIncrementalIndex:
 # Force re-index replaces all chunks even when content hasn't changed.
 # ---------------------------------------------------------------------------
 class TestForceReindex:
-    async def test_force_reindex_re_embeds_unchanged_file(self, md_dir):
+    def test_force_reindex_re_embeds_unchanged_file(self, md_dir):
         """index(force=True) must re-embed all chunks even if they already exist."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 >= 1
 
             # Normal re-index skips everything
-            embedder.embed.reset_mock()
-            count2 = await zs.index()
+            store.embed_and_upsert.reset_mock()
+            count2 = zs.index()
             assert count2 == 0
-            embedder.embed.assert_not_called()
+            store.embed_and_upsert.assert_not_called()
 
-            # Force re-index must re-embed
-            embedder.embed.reset_mock()
-            count3 = await zs.index(force=True)
+            # Force re-index must re-embed via embed_and_insert
+            count3 = zs.index(force=True)
             assert count3 >= 1
-            embedder.embed.assert_called()
+            store.embed_and_insert.assert_called()
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_force_reindex_calls_delete_by_source(self, md_dir):
+    def test_force_reindex_calls_delete_by_source(self, md_dir):
         """index(force=True) must delete old source chunks before reinserting."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             store.delete_by_source.reset_mock()
 
-            await zs.index(force=True)
+            zs.index(force=True)
 
             store.delete_by_source.assert_called()
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_force_reindex_all_files(self, multi_md_dir):
+    def test_force_reindex_all_files(self, multi_md_dir):
         """index(force=True) on multiple files re-embeds all of them."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 >= 3
 
-            embedder.embed.reset_mock()
-            count_forced = await zs.index(force=True)
+            count_forced = zs.index(force=True)
             assert count_forced >= 3
-            assert embedder.embed.call_count >= 1
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_force_reindex_store_count_unchanged(self, md_dir):
+    def test_force_reindex_store_count_unchanged(self, md_dir):
         """After force re-index, the store should contain the same chunk count."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             count_before = store.count()
 
-            await zs.index(force=True)
+            zs.index(force=True)
             count_after = store.count()
 
             assert count_after == count_before
@@ -454,16 +442,15 @@ class TestForceReindex:
             zs.close()
             _stop_patches(patches)
 
-    async def test_force_false_skips_existing_chunks(self, md_dir):
+    def test_force_false_skips_existing_chunks(self, md_dir):
         """Default (force=False) must not re-embed already-indexed chunks."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            assert embedder.embed.call_count >= 1
+            zs.index()
 
-            embedder.embed.reset_mock()
-            await zs.index(force=False)
-            embedder.embed.assert_not_called()
+            store.embed_and_upsert.reset_mock()
+            zs.index(force=False)
+            store.embed_and_upsert.assert_not_called()
         finally:
             zs.close()
             _stop_patches(patches)
@@ -474,12 +461,12 @@ class TestForceReindex:
 # Verify search returns proper structure with all required fields.
 # ---------------------------------------------------------------------------
 class TestSearchWithResults:
-    async def test_search_returns_all_required_fields(self, md_dir):
+    def test_search_returns_all_required_fields(self, md_dir):
         """Every search result must contain all expected metadata fields."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("neural networks", top_k=5)
+            zs.index()
+            results = zs.search("neural networks", top_k=5)
 
             assert isinstance(results, list)
             assert len(results) >= 1
@@ -493,12 +480,12 @@ class TestSearchWithResults:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_scores_are_non_negative_floats(self, md_dir):
+    def test_search_scores_are_non_negative_floats(self, md_dir):
         """Each result's score must be a non-negative float."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("deep learning")
+            zs.index()
+            results = zs.search("deep learning")
 
             for r in results:
                 assert isinstance(r["score"], (int, float))
@@ -507,75 +494,75 @@ class TestSearchWithResults:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_empty_store_returns_empty_list(self, md_dir):
+    def test_search_empty_store_returns_empty_list(self, md_dir):
         """Searching before any indexing must return an empty list."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
             # No indexing - store is empty
-            results = await zs.search("anything")
+            results = zs.search("anything")
             assert results == []
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_top_k_limits_results(self, multi_md_dir):
+    def test_search_top_k_limits_results(self, multi_md_dir):
         """search(top_k=N) must return at most N results."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("semantic search", top_k=2)
+            zs.index()
+            results = zs.search("semantic search", top_k=2)
             assert len(results) <= 2
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_calls_embedder_with_query(self, md_dir):
-        """search() must embed the query text before calling the store."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+    def test_search_calls_embedder_with_query(self, md_dir):
+        """search() must pass the query text to the store."""
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            embedder.embed.reset_mock()
-            await zs.search("deep learning query")
-            embedder.embed.assert_called_once_with(["deep learning query"])
+            store.search.reset_mock()
+            zs.search("deep learning query")
+            store.search.assert_called_once_with(query_text="deep learning query", top_k=10)
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_passes_embedding_to_store(self, md_dir):
-        """search() must forward the embedding returned by the embedder to the store."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+    def test_search_passes_embedding_to_store(self, md_dir):
+        """search() must forward query_text and top_k to the store."""
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             store.search.reset_mock()
 
-            await zs.search("test query", top_k=3)
+            zs.search("test query", top_k=3)
 
             store.search.assert_called_once()
             call_kwargs = store.search.call_args[1]
-            assert "query_embedding" in call_kwargs
+            assert "query_text" in call_kwargs
             assert "top_k" in call_kwargs
             assert call_kwargs["top_k"] == 3
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_source_field_is_string(self, md_dir):
+    def test_search_source_field_is_string(self, md_dir):
         """The source field in search results must be a string."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("introduction")
+            zs.index()
+            results = zs.search("introduction")
             for r in results:
                 assert isinstance(r["source"], str)
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_search_content_field_is_string(self, md_dir):
+    def test_search_content_field_is_string(self, md_dir):
         """The content field in search results must be a string."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
-            results = await zs.search("introduction")
+            zs.index()
+            results = zs.search("introduction")
             for r in results:
                 assert isinstance(r["content"], str)
         finally:
@@ -588,44 +575,44 @@ class TestSearchWithResults:
 # Verify count matches and stats reflect the indexed state correctly.
 # ---------------------------------------------------------------------------
 class TestStatsAfterIndexing:
-    async def test_count_equals_indexed_chunk_count(self, md_dir):
+    def test_count_equals_indexed_chunk_count(self, md_dir):
         """store.count() must equal the value returned by index()."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert store.count() == count
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_count_is_zero_before_indexing(self, md_dir):
+    def test_count_is_zero_before_indexing(self, md_dir):
         """Before any indexing, the store must be empty."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
             assert store.count() == 0
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_count_reflects_multiple_files(self, multi_md_dir):
+    def test_count_reflects_multiple_files(self, multi_md_dir):
         """Indexing three files yields at least three chunks in the store."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count >= 3
             assert store.count() == count
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_count_stable_after_second_index(self, md_dir):
+    def test_count_stable_after_second_index(self, md_dir):
         """A second index() call should not change the total chunk count."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             count1 = store.count()
 
-            await zs.index()
+            zs.index()
             count2 = store.count()
 
             assert count1 == count2
@@ -633,11 +620,11 @@ class TestStatsAfterIndexing:
             zs.close()
             _stop_patches(patches)
 
-    async def test_count_decreases_after_source_deletion(self, multi_md_dir):
+    def test_count_decreases_after_source_deletion(self, multi_md_dir):
         """Deleting one source's chunks must reduce the total count."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            await zs.index()
+            zs.index()
             count_before = store.count()
 
             alpha_path = str((multi_md_dir / "alpha.md").resolve())
@@ -649,11 +636,11 @@ class TestStatsAfterIndexing:
             zs.close()
             _stop_patches(patches)
 
-    async def test_count_includes_all_sources(self, multi_md_dir):
+    def test_count_includes_all_sources(self, multi_md_dir):
         """Every indexed file contributes chunks to the total count."""
-        zs, embedder, store, patches = _make_zs([str(multi_md_dir)])
+        zs, store, patches = _make_zs([str(multi_md_dir)])
         try:
-            await zs.index()
+            zs.index()
 
             sources_in_store = {c["source"] for c in store._docs.values()}
             expected_sources = {
@@ -671,47 +658,47 @@ class TestStatsAfterIndexing:
 # Additional edge cases and end-to-end scenarios
 # ---------------------------------------------------------------------------
 class TestPipelineEdgeCases:
-    async def test_index_empty_directory(self, tmp_path):
+    def test_index_empty_directory(self, tmp_path):
         """Indexing an empty directory should return 0 chunks."""
-        zs, embedder, store, patches = _make_zs([str(tmp_path)])
+        zs, store, patches = _make_zs([str(tmp_path)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count == 0
             assert store.count() == 0
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_index_empty_markdown_file(self, tmp_path):
+    def test_index_empty_markdown_file(self, tmp_path):
         """Indexing an empty markdown file should return 0 chunks."""
         (tmp_path / "empty.md").write_text("")
-        zs, embedder, store, patches = _make_zs([str(tmp_path)])
+        zs, store, patches = _make_zs([str(tmp_path)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count == 0
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_index_file_directly(self, md_dir):
+    def test_index_file_directly(self, md_dir):
         """index_file() on a specific path should index only that file."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count = await zs.index_file(md_dir / "doc.md")
+            count = zs.index_file(md_dir / "doc.md")
             assert count >= 1
             assert store.count() >= 1
         finally:
             zs.close()
             _stop_patches(patches)
 
-    async def test_upserted_records_have_required_fields(self, md_dir):
-        """Every record passed to store.upsert() must contain all schema fields."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+    def test_upserted_records_have_required_fields(self, md_dir):
+        """Every record passed to store must contain all schema fields."""
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
 
             required = {"chunk_hash", "content", "source", "heading",
-                        "heading_level", "start_line", "end_line", "embedding"}
+                        "heading_level", "start_line", "end_line"}
             for chunk_hash, record in store._docs.items():
                 missing = required - set(record.keys())
                 assert not missing, f"Record {chunk_hash!r} missing: {missing}"
@@ -719,30 +706,28 @@ class TestPipelineEdgeCases:
             zs.close()
             _stop_patches(patches)
 
-    async def test_context_manager_closes_store(self, md_dir):
+    def test_context_manager_closes_store(self, md_dir):
         """Using ZvecSearch as a context manager must close the store on exit."""
         store = _make_store()
-        embedder = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", return_value=embedder), \
-             patch("zvecsearch.core.ZvecStore", return_value=store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             with ZvecSearch(paths=[str(md_dir)],
                             zvec_path="/tmp/unused_zvec_path") as zs:
-                await zs.index()
+                zs.index()
 
         store.close.assert_called_once()
 
-    async def test_chunk_ids_incorporate_model_name(self, md_dir):
+    def test_chunk_ids_incorporate_model_name(self, md_dir):
         """Chunk IDs must encode the embedding model name for cache invalidation."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
 
             text = (md_dir / "doc.md").read_text()
             chunks = chunk_markdown(text, source=str((md_dir / "doc.md").resolve()))
             expected_ids = {
                 compute_chunk_id(c.source, c.start_line, c.end_line,
-                                 c.content_hash, "test-model")
+                                 c.content_hash, "zvec")
                 for c in chunks
             }
             actual_ids = set(store._docs.keys())
@@ -751,29 +736,14 @@ class TestPipelineEdgeCases:
             zs.close()
             _stop_patches(patches)
 
-    async def test_embedding_dimension_propagated(self, md_dir):
-        """The embedding stored per chunk must have the correct dimension."""
-        dim = 8
-        zs, embedder, store, patches = _make_zs(
-            [str(md_dir)],
-            embedder=_make_embedder(dim),
-        )
-        try:
-            await zs.index()
-            for record in store._docs.values():
-                assert len(record["embedding"]) == dim
-        finally:
-            zs.close()
-            _stop_patches(patches)
-
-    async def test_index_then_search_end_to_end(self, md_dir):
+    def test_index_then_search_end_to_end(self, md_dir):
         """Full round-trip: index then search returns non-empty, structured results."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            count = await zs.index()
+            count = zs.index()
             assert count >= 1
 
-            results = await zs.search("machine learning neural networks", top_k=5)
+            results = zs.search("machine learning neural networks", top_k=5)
             assert isinstance(results, list)
             assert len(results) >= 1
             for r in results:
@@ -783,11 +753,11 @@ class TestPipelineEdgeCases:
             zs.close()
             _stop_patches(patches)
 
-    async def test_source_path_stored_as_resolved_string(self, md_dir):
+    def test_source_path_stored_as_resolved_string(self, md_dir):
         """The source field in stored chunks must be the resolved absolute path."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             expected_source = str((md_dir / "doc.md").resolve())
             for record in store._docs.values():
                 assert record["source"] == expected_source
@@ -795,11 +765,11 @@ class TestPipelineEdgeCases:
             zs.close()
             _stop_patches(patches)
 
-    async def test_start_and_end_lines_are_positive(self, md_dir):
+    def test_start_and_end_lines_are_positive(self, md_dir):
         """start_line and end_line in stored chunks must be positive integers."""
-        zs, embedder, store, patches = _make_zs([str(md_dir)])
+        zs, store, patches = _make_zs([str(md_dir)])
         try:
-            await zs.index()
+            zs.index()
             for record in store._docs.values():
                 assert isinstance(record["start_line"], int)
                 assert isinstance(record["end_line"], int)

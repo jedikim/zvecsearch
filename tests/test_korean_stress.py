@@ -16,8 +16,6 @@ import sys
 import unicodedata
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 # ---------------------------------------------------------------------------
 # zvec 모듈 스텁 (네이티브 라이브러리가 AVX-512 필요)
 # ---------------------------------------------------------------------------
@@ -42,6 +40,9 @@ if "zvec" not in sys.modules:
     _zvec_stub.RrfReRanker = MagicMock
     _zvec_stub.BM25EmbeddingFunction = MagicMock
     _zvec_stub.Doc = MagicMock
+    _zvec_stub.WeightedReRanker = MagicMock
+    _zvec_stub.HnswQueryParam = MagicMock
+    _zvec_stub.OpenAIDenseEmbedding = MagicMock
     sys.modules["zvec"] = _zvec_stub
 
 from zvecsearch.chunker import Chunk, chunk_markdown, compute_chunk_id  # noqa: E402
@@ -94,7 +95,14 @@ def _make_stateful_store() -> MagicMock:
             store._docs[c["chunk_hash"]] = c
         return len(chunks)
 
-    store.upsert.side_effect = _upsert
+    store.embed_and_upsert.side_effect = _upsert
+
+    def _insert(chunks):
+        for c in chunks:
+            store._docs[c["chunk_hash"]] = c
+        return len(chunks)
+
+    store.embed_and_insert.side_effect = _insert
     store.count.side_effect = lambda: len(store._docs)
 
     def _hashes_by_source(source):
@@ -120,7 +128,7 @@ def _make_stateful_store() -> MagicMock:
 
     store.delete_by_source.side_effect = _delete_by_source
 
-    def _search(query_embedding, query_text="", top_k=10, filter_expr=""):
+    def _search(query_text="", top_k=10):
         results = list(store._docs.values())[:top_k]
         return [
             {
@@ -139,28 +147,9 @@ def _make_stateful_store() -> MagicMock:
     store.search.side_effect = _search
     store.close.return_value = None
     store.drop.return_value = None
+    store.flush.return_value = None
+    store.optimize.return_value = None
     return store
-
-
-class FakeEmbedder:
-    """Mock 오염을 피하기 위한 순수 Python 임베딩 제공자."""
-
-    def __init__(self, dim: int = TEST_DIM):
-        self.model_name = "korean-stress-test-model"
-        self.dimension = dim
-        self._dim = dim
-        self._embed_calls: list[list[str]] = []
-        self._custom_return = None
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        self._embed_calls.append(texts)
-        if self._custom_return is not None:
-            return self._custom_return
-        return [[float(i + 1) * 0.1] * self._dim for i, _ in enumerate(texts)]
-
-
-def _make_embedder(dim: int = TEST_DIM) -> FakeEmbedder:
-    return FakeEmbedder(dim=dim)
 
 
 # ---------------------------------------------------------------------------
@@ -542,18 +531,15 @@ class TestKoreanScannerStress:
 class TestKoreanPipelineStress:
     """한국어 데이터를 사용한 전체 파이프라인 테스트."""
 
-    @pytest.mark.asyncio
-    async def test_index_100_korean_files(self, tmp_path):
+    def test_index_100_korean_files(self, tmp_path):
         """100개 한국어 파일 인덱싱."""
         _generate_korean_files(tmp_path, count=100)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count == 100
             assert store.count() == 100
             # 한국어 내용 보존 확인
@@ -565,8 +551,7 @@ class TestKoreanPipelineStress:
             assert korean_count == 100
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_search_returns_korean_content(self, tmp_path):
+    def test_korean_search_returns_korean_content(self, tmp_path):
         """한국어 쿼리로 검색."""
         for i in range(10):
             topic = _KOREAN_TOPICS[i]
@@ -575,15 +560,12 @@ class TestKoreanPipelineStress:
             )
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
+            zs.index()
 
-            emb._custom_return = [[0.5] * TEST_DIM]
-            results = await zs.search("인공지능 기술", top_k=5)
+            results = zs.search("인공지능 기술", top_k=5)
             assert len(results) <= 5
             assert all("content" in r for r in results)
             # 결과에 한국어 포함
@@ -592,18 +574,15 @@ class TestKoreanPipelineStress:
                 assert has_korean
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_incremental_add(self, tmp_path):
+    def test_korean_incremental_add(self, tmp_path):
         """한국어 파일 50개 인덱싱 후 20개 추가."""
         _generate_korean_files(tmp_path, count=50)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 == 50
 
             # 20개 추가
@@ -613,35 +592,31 @@ class TestKoreanPipelineStress:
                     f"# {topic} 추가\n\n추가된 문서입니다."
                 )
 
-            count2 = await zs.index()
+            count2 = zs.index()
             assert count2 == 20
             assert store.count() == 70
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_incremental_modify(self, tmp_path):
+    def test_korean_incremental_modify(self, tmp_path):
         """한국어 파일 내용 변경 후 증분 인덱싱."""
         fpath = tmp_path / "변경대상.md"
         fpath.write_text("# 원본 문서\n\n원본 내용입니다.")
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
+            zs.index()
             assert store.count() == 1
 
             # 내용 변경
             fpath.write_text("# 수정된 문서\n\n수정된 내용으로 업데이트되었습니다.")
-            count2 = await zs.index()
+            count2 = zs.index()
             assert count2 == 1  # 새 청크
             assert store.count() == 1  # 이전 것 삭제, 새 것 추가
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_incremental_delete_and_reindex(self, tmp_path):
+    def test_korean_incremental_delete_and_reindex(self, tmp_path):
         """파일 삭제 후 재인덱싱."""
         for i in range(5):
             (tmp_path / f"삭제테스트_{i}.md").write_text(
@@ -649,12 +624,10 @@ class TestKoreanPipelineStress:
             )
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
+            zs.index()
             assert store.count() == 5
 
             # 2개 파일 삭제
@@ -662,40 +635,34 @@ class TestKoreanPipelineStress:
             (tmp_path / "삭제테스트_1.md").unlink()
 
             # 재인덱싱 — 남은 3개만 재인덱싱 (삭제된 파일은 scan에서 빠짐)
-            await zs.index()
+            zs.index()
             # 삭제된 파일의 소스가 store에서 자동 제거되지 않음 (scan에 없으므로)
             # 하지만 남은 파일은 이미 있으므로 0개 새 청크
             # 총 store에는 여전히 5개 (삭제된 소스를 명시적으로 지우지 않으면)
             assert store.count() >= 3
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_force_reindex_large(self, tmp_path):
+    def test_korean_force_reindex_large(self, tmp_path):
         """50개 한국어 파일 강제 재인덱싱."""
         _generate_korean_files(tmp_path, count=50)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count1 = await zs.index()
+            count1 = zs.index()
             assert count1 == 50
 
-            count2 = await zs.index(force=True)
+            count2 = zs.index(force=True)
             assert count2 == 50
             assert store.count() == 50
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_multi_search_cycle(self, tmp_path):
+    def test_korean_multi_search_cycle(self, tmp_path):
         """10회 인덱싱-검색 반복 사이클."""
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             for cycle in range(10):
@@ -703,18 +670,16 @@ class TestKoreanPipelineStress:
                 (tmp_path / f"사이클_{cycle}_{topic}.md").write_text(
                     f"# {topic}\n\n{topic}에 대한 사이클 {cycle} 문서."
                 )
-                count = await zs.index()
+                count = zs.index()
                 assert count == 1
 
-                emb._custom_return = [[0.5] * TEST_DIM]
-                results = await zs.search(f"{topic} 검색", top_k=50)
+                results = zs.search(f"{topic} 검색", top_k=50)
                 assert len(results) == cycle + 1
 
             assert store.count() == 10
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_mixed_language_pipeline(self, tmp_path):
+    def test_korean_mixed_language_pipeline(self, tmp_path):
         """한국어+영어+일본어 혼합 파일 파이프라인."""
         (tmp_path / "korean.md").write_text(
             "# 한국어 문서\n\n인공지능 기술에 대한 한국어 설명입니다."
@@ -730,12 +695,10 @@ class TestKoreanPipelineStress:
         )
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count == 4
             stored = {d["source"].split("/")[-1] for d in store._docs.values()}
             assert "korean.md" in stored
@@ -961,28 +924,23 @@ GitHub 저장소: https://github.com/jedikim/zvecsearch
 class TestKoreanLargeScaleIntegration:
     """대규모 한국어 데이터의 전체 파이프라인 통합 테스트."""
 
-    @pytest.mark.asyncio
-    async def test_200_korean_files_full_pipeline(self, tmp_path):
+    def test_200_korean_files_full_pipeline(self, tmp_path):
         """200개 한국어 파일 전체 파이프라인."""
         _generate_korean_files(tmp_path, count=200)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count == 200
             assert store.count() == 200
 
-            emb._custom_return = [[0.5] * TEST_DIM]
-            results = await zs.search("인공지능", top_k=20)
+            results = zs.search("인공지능", top_k=20)
             assert len(results) == 20
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_large_korean_document_1000_lines(self, tmp_path):
+    def test_large_korean_document_1000_lines(self, tmp_path):
         """1000줄 한국어 문서 청킹 + 인덱싱 + 검색."""
         lines = ["# 대규모 한국어 기술 문서\n"]
         for i in range(50):
@@ -997,44 +955,34 @@ class TestKoreanLargeScaleIntegration:
         (tmp_path / "대규모문서.md").write_text(md)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             assert count >= 50  # 최소 50개 섹션
-            assert len(emb._embed_calls) >= 1
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_search_result_ordering(self, tmp_path):
+    def test_korean_search_result_ordering(self, tmp_path):
         """다양한 top_k로 검색 결과 수 제한 준수."""
         _generate_korean_files(tmp_path, count=50)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
+            zs.index()
 
-            emb._custom_return = [[0.5] * TEST_DIM]
             for k in [1, 3, 5, 10, 25, 50]:
-                results = await zs.search("머신러닝", top_k=k)
+                results = zs.search("머신러닝", top_k=k)
                 assert len(results) <= k
                 assert all(isinstance(r["score"], float) for r in results)
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_concurrent_korean_file_changes(self, tmp_path):
+    def test_concurrent_korean_file_changes(self, tmp_path):
         """5회 사이클(파일 추가+수정+삭제) → 최종 상태."""
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             live_files = set()
@@ -1047,7 +995,7 @@ class TestKoreanLargeScaleIntegration:
                     )
                     live_files.add(name)
 
-                await zs.index()
+                zs.index()
 
                 # 이전 사이클 파일 1개 수정 (있는 경우)
                 if cycle > 0:
@@ -1057,15 +1005,14 @@ class TestKoreanLargeScaleIntegration:
                             f"# 수정됨 사이클 {cycle}\n\n수정된 내용."
                         )
 
-                await zs.index()
+                zs.index()
 
             # 최종: 15개 파일이 생성됨
             assert len(live_files) == 15
             assert store.count() == 15
             zs.close()
 
-    @pytest.mark.asyncio
-    async def test_korean_content_utf8_roundtrip(self, tmp_path):
+    def test_korean_content_utf8_roundtrip(self, tmp_path):
         """한국어 → 청킹 → 저장 → 조회 → 원본 일치."""
         original = "# 유니코드 라운드트립\n\n한글 가나다라마바사아자차카타파하. " \
                    "특수문자: ※★◆■●→. 자모: ㄱㄴㄷㄹㅁㅂㅅ. " \
@@ -1073,12 +1020,10 @@ class TestKoreanLargeScaleIntegration:
         (tmp_path / "roundtrip.md").write_text(original)
 
         store = _make_stateful_store()
-        emb = _make_embedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            await zs.index()
+            zs.index()
 
             stored_content = list(store._docs.values())[0]["content"]
             assert "한글 가나다라마바사아자차카타파하" in stored_content
@@ -1114,7 +1059,7 @@ class TestKoreanCLIStress:
 
         runner = CliRunner()
         commands = ["index", "search", "watch", "compact", "stats",
-                     "reset", "expand", "transcript", "config"]
+                     "reset", "expand", "transcript", "config", "optimize"]
         for cmd in commands:
             result = runner.invoke(cli, [cmd, "--help"])
             assert result.exit_code == 0, f"'{cmd} --help' 실패: {result.output}"
@@ -1138,5 +1083,5 @@ class TestKoreanCLIStress:
         runner = CliRunner()
         result = runner.invoke(cli, ["config", "list", "--resolved"])
         assert result.exit_code == 0
-        for section in ["zvec", "index", "embedding", "compact", "chunking", "watch"]:
+        for section in ["zvec", "search", "embedding", "compact", "chunking", "watch"]:
             assert section in result.output, f"섹션 '{section}'이 출력에 없음"

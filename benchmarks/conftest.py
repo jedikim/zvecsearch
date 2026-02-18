@@ -36,6 +36,9 @@ if "zvec" not in sys.modules:
     _zvec_stub.RrfReRanker = MagicMock
     _zvec_stub.BM25EmbeddingFunction = MagicMock
     _zvec_stub.Doc = MagicMock
+    _zvec_stub.WeightedReRanker = MagicMock
+    _zvec_stub.HnswQueryParam = MagicMock
+    _zvec_stub.OpenAIDenseEmbedding = MagicMock
     sys.modules["zvec"] = _zvec_stub
 
 from zvecsearch.chunker import chunk_markdown  # noqa: E402
@@ -250,13 +253,34 @@ def _make_embedding_fixtures(provider_name, model_name, env_var, factory):
 
 
 def _openai_factory():
-    from zvecsearch.embeddings.openai import OpenAIEmbedding
-    return OpenAIEmbedding(model="text-embedding-3-small")
+    import openai
+
+    _client = openai.AsyncOpenAI()
+
+    class _Provider:
+        async def embed(self, texts):
+            resp = await _client.embeddings.create(
+                model="text-embedding-3-small", input=texts,
+            )
+            return [d.embedding for d in resp.data]
+
+    return _Provider()
 
 
 def _google_factory():
-    from zvecsearch.embeddings.google import GoogleEmbedding
-    return GoogleEmbedding(model="gemini-embedding-001", output_dimensionality=768)
+    from google import genai
+
+    class _Provider:
+        async def embed(self, texts):
+            client = genai.Client()
+            result = await client.aio.models.embed_content(
+                model="gemini-embedding-001",
+                contents=texts,
+                config={"output_dimensionality": 768},
+            )
+            return [e.values for e in result.embeddings]
+
+    return _Provider()
 
 
 # OpenAI 임베딩 픽스처

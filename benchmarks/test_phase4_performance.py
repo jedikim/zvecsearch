@@ -13,8 +13,6 @@ from __future__ import annotations
 import time
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from benchmarks.conftest import keyword_search
 from zvecsearch.chunker import chunk_markdown
 from zvecsearch.core import ZvecSearch
@@ -55,18 +53,6 @@ def _generate_bench_docs(count: int = 100) -> list[str]:
     return docs
 
 
-class FakeEmbedder:
-    """성능 측정용 임베딩 제공자."""
-
-    def __init__(self, dim: int = 8):
-        self.model_name = "bench-model"
-        self.dimension = dim
-        self._dim = dim
-
-    async def embed(self, texts: list[str]) -> list[list[float]]:
-        return [[0.1] * self._dim for _ in texts]
-
-
 def _make_bench_store() -> MagicMock:
     """벤치마크용 상태 기반 스토어."""
     store = MagicMock()
@@ -77,7 +63,8 @@ def _make_bench_store() -> MagicMock:
             store._docs[c["chunk_hash"]] = c
         return len(chunks)
 
-    store.upsert.side_effect = _upsert
+    store.embed_and_upsert.side_effect = _upsert
+    store.embed_and_insert.side_effect = _upsert
     store.count.side_effect = lambda: len(store._docs)
     store.hashes_by_source.side_effect = lambda src: {
         h for h, c in store._docs.items() if c.get("source") == src
@@ -94,6 +81,8 @@ def _make_bench_store() -> MagicMock:
         )
     ]
     store.search.side_effect = lambda **kw: list(store._docs.values())[:kw.get("top_k", 10)]
+    store.flush.return_value = None
+    store.optimize.return_value = None
     store.close.return_value = None
     return store
 
@@ -279,21 +268,18 @@ class TestSearchPerformance:
 class TestPipelinePerformance:
     """전체 인덱싱 파이프라인 성능 측정 (mock 임베딩)."""
 
-    @pytest.mark.asyncio
-    async def test_index_100_files_throughput(self, tmp_path, capsys):
+    def test_index_100_files_throughput(self, tmp_path, capsys):
         """100개 파일 인덱싱 처리량."""
         docs = _generate_bench_docs(100)
         for i, doc in enumerate(docs):
             (tmp_path / f"bench_{i:03d}.md").write_text(doc)
 
         store = _make_bench_store()
-        emb = FakeEmbedder()
 
         start = time.perf_counter()
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
-            count = await zs.index()
+            count = zs.index()
             zs.close()
         elapsed = time.perf_counter() - start
 
@@ -309,28 +295,25 @@ class TestPipelinePerformance:
 
         assert docs_per_sec > 50, f"인덱싱 {docs_per_sec:.0f} docs/s (기준: >50)"
 
-    @pytest.mark.asyncio
-    async def test_incremental_index_performance(self, tmp_path, capsys):
+    def test_incremental_index_performance(self, tmp_path, capsys):
         """증분 인덱싱 성능 (재인덱싱 시 스킵 속도)."""
         docs = _generate_bench_docs(50)
         for i, doc in enumerate(docs):
             (tmp_path / f"bench_{i:03d}.md").write_text(doc)
 
         store = _make_bench_store()
-        emb = FakeEmbedder()
 
-        with patch("zvecsearch.core.get_provider", side_effect=lambda *a, **kw: emb), \
-             patch("zvecsearch.core.ZvecStore", side_effect=lambda *a, **kw: store):
+        with patch("zvecsearch.core.ZvecStore", return_value=store):
             zs = ZvecSearch(paths=[str(tmp_path)], zvec_path="/tmp/fake")
 
             # 첫 인덱싱
             start1 = time.perf_counter()
-            count1 = await zs.index()
+            count1 = zs.index()
             elapsed1 = time.perf_counter() - start1
 
             # 두 번째 인덱싱 (변경 없음 → 스킵)
             start2 = time.perf_counter()
-            count2 = await zs.index()
+            count2 = zs.index()
             elapsed2 = time.perf_counter() - start2
 
             zs.close()

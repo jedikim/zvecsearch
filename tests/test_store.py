@@ -1,4 +1,4 @@
-"""Tests for ZvecStore - the core storage layer wrapping zvec.
+"""Tests for ZvecStore - zvec-native storage with embedded embedding.
 
 Since zvec's native C++ backend requires specific CPU features (AVX-512) that may
 not be available in all environments, these tests mock the zvec dependency and verify
@@ -9,37 +9,12 @@ import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 
 # ---------------------------------------------------------------------------
-# Build a comprehensive mock of the zvec module so that store.py can import
-# it even when the real native library is unavailable.
+# Helpers
 # ---------------------------------------------------------------------------
 
-_zvec_mock = MagicMock()
-
-# Enums
-_zvec_mock.DataType.STRING = "STRING"
-_zvec_mock.DataType.INT32 = "INT32"
-_zvec_mock.DataType.VECTOR_FP32 = "VECTOR_FP32"
-_zvec_mock.DataType.SPARSE_VECTOR_FP32 = "SPARSE_VECTOR_FP32"
-_zvec_mock.MetricType.COSINE = "COSINE"
-_zvec_mock.MetricType.L2 = "L2"
-_zvec_mock.MetricType.IP = "IP"
-_zvec_mock.LogLevel.WARN = "WARN"
-
-# Classes that store.py instantiates
-_zvec_mock.FieldSchema = MagicMock
-_zvec_mock.VectorSchema = MagicMock
-_zvec_mock.CollectionSchema = MagicMock
-_zvec_mock.CollectionOption = MagicMock
-_zvec_mock.HnswIndexParam = MagicMock
-_zvec_mock.InvertIndexParam = MagicMock
-_zvec_mock.FlatIndexParam = MagicMock
-_zvec_mock.VectorQuery = MagicMock
-_zvec_mock.RrfReRanker = MagicMock
-
-# Doc class needs to be a real factory (store.py creates Doc instances)
 class FakeDoc:
     """Minimal Doc stand-in for testing."""
     def __init__(self, id, fields=None, vectors=None, score=None):
@@ -51,27 +26,69 @@ class FakeDoc:
     def field(self, name):
         return self.fields.get(name)
 
-    def has_field(self, name):
-        return name in self.fields
 
-_zvec_mock.Doc = FakeDoc
+class FakeStatus:
+    """Simulates a zvec status return from upsert/insert."""
+    def __init__(self, ok=True, code=0, message=""):
+        self._ok = ok
+        self._code = code
+        self._message = message
+
+    def ok(self):
+        return self._ok
+
+    def code(self):
+        return self._code
+
+    def message(self):
+        return self._message
+
+
+# ---------------------------------------------------------------------------
+# Build a comprehensive mock of the zvec module so that store.py can import
+# it even when the real native library is unavailable.
+# ---------------------------------------------------------------------------
+
+_zvec_stub = MagicMock()
+
+# Enums
+_zvec_stub.DataType.STRING = "STRING"
+_zvec_stub.DataType.INT32 = "INT32"
+_zvec_stub.DataType.VECTOR_FP32 = "VECTOR_FP32"
+_zvec_stub.DataType.SPARSE_VECTOR_FP32 = "SPARSE_VECTOR_FP32"
+_zvec_stub.MetricType.COSINE = "COSINE"
+_zvec_stub.MetricType.L2 = "L2"
+_zvec_stub.MetricType.IP = "IP"
+_zvec_stub.LogLevel.WARN = "WARN"
+
+# Classes that store.py instantiates
+_zvec_stub.FieldSchema = MagicMock
+_zvec_stub.VectorSchema = MagicMock
+_zvec_stub.CollectionSchema = MagicMock
+_zvec_stub.CollectionOption = MagicMock
+_zvec_stub.HnswIndexParam = MagicMock
+_zvec_stub.InvertIndexParam = MagicMock
+_zvec_stub.VectorQuery = MagicMock
+_zvec_stub.RrfReRanker = MagicMock
+_zvec_stub.WeightedReRanker = MagicMock
+_zvec_stub.HnswQueryParam = MagicMock
+_zvec_stub.OpenAIDenseEmbedding = MagicMock
+_zvec_stub.Doc = FakeDoc
 
 # Patch zvec in sys.modules before importing store
-sys.modules["zvec"] = _zvec_mock
+sys.modules["zvec"] = _zvec_stub
 
 from zvecsearch.store import ZvecStore  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-TEST_DIM = 4
 TEST_DB = Path("/tmp/zvecsearch_test_db")
 
 
 def _make_mock_collection():
     """Create a mock collection that simulates zvec Collection behavior."""
     collection = MagicMock()
-    # Internal doc storage for simulating real behavior
     collection._docs = {}
     collection._destroyed = False
 
@@ -82,21 +99,33 @@ def _make_mock_collection():
         return s
     type(collection).stats = property(lambda self: _stats())
 
-    # upsert: store docs by id and return status list
+    # upsert: store docs by id and return FakeStatus list
     def _upsert(docs):
         if not isinstance(docs, list):
             docs = [docs]
         statuses = []
         for doc in docs:
             collection._docs[doc.id] = doc
-            status = MagicMock()
-            status.ok.return_value = True
-            statuses.append(status)
+            statuses.append(FakeStatus(ok=True))
         return statuses
     collection.upsert.side_effect = _upsert
 
+    # insert: store docs by id and return FakeStatus list
+    def _insert(docs):
+        if not isinstance(docs, list):
+            docs = [docs]
+        statuses = []
+        for doc in docs:
+            collection._docs[doc.id] = doc
+            statuses.append(FakeStatus(ok=True))
+        return statuses
+    collection.insert.side_effect = _insert
+
     # flush: no-op
     collection.flush.return_value = None
+
+    # optimize: no-op
+    collection.optimize.return_value = None
 
     # delete: remove by ids
     def _delete(ids):
@@ -104,12 +133,9 @@ def _make_mock_collection():
             ids = [ids]
         statuses = []
         for id_ in ids:
-            status = MagicMock()
+            status = FakeStatus(ok=(id_ in collection._docs))
             if id_ in collection._docs:
                 del collection._docs[id_]
-                status.ok.return_value = True
-            else:
-                status.ok.return_value = False
             statuses.append(status)
         return statuses
     collection.delete.side_effect = _delete
@@ -135,9 +161,9 @@ def _make_mock_collection():
         return {id_: collection._docs[id_] for id_ in ids if id_ in collection._docs}
     collection.fetch.side_effect = _fetch
 
-    # query: simulate vector search - returns docs matching filter or all docs
+    # query: simulate search - returns docs matching filter or all docs
     def _query(vectors=None, topk=10, filter=None, output_fields=None,
-               include_vector=False, reranker=None):
+               reranker=None, query_param=None):
         import re
         results = list(collection._docs.values())
         if filter:
@@ -145,7 +171,6 @@ def _make_mock_collection():
             if m:
                 source_val = m.group(1)
                 results = [d for d in results if d.fields.get("source") == source_val]
-        # Give each result a score
         scored = []
         for i, doc in enumerate(results[:topk]):
             doc.score = 1.0 / (i + 1)
@@ -173,19 +198,18 @@ def clean_db():
 
 
 @pytest.fixture
-def mock_zvec_env():
-    """Set up mocked zvec environment and return the mock collection."""
+def store():
+    """Set up mocked zvec environment and return (ZvecStore, mock_collection)."""
     import zvecsearch.store as store_module
-    # Reset the global init flag so each test starts fresh
     store_module._zvec_initialized = False
 
     mock_collection = _make_mock_collection()
 
     with patch("zvecsearch.store.zvec") as zvec_mod:
-        # Wire up the module mock to return our simulating collection
-        zvec_mod.DataType = _zvec_mock.DataType
-        zvec_mod.MetricType = _zvec_mock.MetricType
-        zvec_mod.LogLevel = _zvec_mock.LogLevel
+        # Wire up the module mock
+        zvec_mod.DataType = _zvec_stub.DataType
+        zvec_mod.MetricType = _zvec_stub.MetricType
+        zvec_mod.LogLevel = _zvec_stub.LogLevel
         zvec_mod.FieldSchema = MagicMock
         zvec_mod.VectorSchema = MagicMock
         zvec_mod.CollectionSchema = MagicMock
@@ -193,36 +217,39 @@ def mock_zvec_env():
         zvec_mod.HnswIndexParam = MagicMock
         zvec_mod.InvertIndexParam = MagicMock
         zvec_mod.VectorQuery = MagicMock
-        zvec_mod.RrfReRanker = MagicMock
+        zvec_mod.RrfReRanker = MagicMock()
+        zvec_mod.WeightedReRanker = MagicMock()
+        zvec_mod.HnswQueryParam = MagicMock()
         zvec_mod.Doc = FakeDoc
-        zvec_mod.BM25EmbeddingFunction = MagicMock
+
+        # Dense embedding mock
+        dense_emb_instance = MagicMock()
+        dense_emb_instance.embed.side_effect = lambda text: [0.1, 0.2, 0.3, 0.4]
+        dense_emb_instance.dim = 4
+        zvec_mod.OpenAIDenseEmbedding = MagicMock(return_value=dense_emb_instance)
 
         # BM25 mock: returns sparse dict from text
-        bm25_instance = MagicMock()
-        bm25_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
-        zvec_mod.BM25EmbeddingFunction.return_value = bm25_instance
+        bm25_doc_instance = MagicMock()
+        bm25_doc_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+        bm25_query_instance = MagicMock()
+        bm25_query_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+        _bm25_instances = iter([bm25_doc_instance, bm25_query_instance])
+        zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_instances))
 
-        # create_and_open returns our mock collection
+        # create_and_open / open return our mock collection
         zvec_mod.create_and_open.return_value = mock_collection
         zvec_mod.open.return_value = mock_collection
         zvec_mod.init.return_value = None
 
-        yield zvec_mod, mock_collection
+        s = ZvecStore(
+            path=str(TEST_DB),
+            collection="test_chunks",
+        )
+        yield s, mock_collection, zvec_mod
 
 
-def _make_store_with_mock(mock_zvec_env, dim=TEST_DIM):
-    """Create a ZvecStore using the mocked zvec environment."""
-    zvec_mod, mock_collection = mock_zvec_env
-    store = ZvecStore(
-        path=str(TEST_DB),
-        collection="test_chunks",
-        dimension=dim,
-    )
-    return store
-
-
-def _sample_chunks(n=3, dim=TEST_DIM):
-    """Generate sample chunk dicts for testing."""
+def _sample_chunks(n=3):
+    """Generate sample chunk dicts for testing (no embedding field)."""
     chunks = []
     for i in range(n):
         chunks.append({
@@ -233,202 +260,100 @@ def _sample_chunks(n=3, dim=TEST_DIM):
             "heading_level": 1,
             "start_line": i * 10 + 1,
             "end_line": i * 10 + 10,
-            "embedding": [float(i)] * dim,
         })
     return chunks
 
 
 # ---------------------------------------------------------------------------
-# Tests: Basic Operations
+# Tests: Creation
 # ---------------------------------------------------------------------------
-class TestZvecStoreBasic:
-    def test_create_and_count(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        assert store.count() == 0
-        store.close()
+class TestZvecStoreCreation:
+    def test_constructor_sets_path(self, store):
+        s, _, _ = store
+        assert "test_chunks" in s._path
 
-    def test_upsert_and_count(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(3)
-        count = store.upsert(chunks)
-        assert count == 3
-        assert store.count() == 3
-        store.close()
+    def test_dense_emb_initialized(self, store):
+        s, _, zvec_mod = store
+        zvec_mod.OpenAIDenseEmbedding.assert_called_once_with(model="text-embedding-3-small")
+        assert s._dense_emb is not None
 
-    def test_upsert_is_idempotent(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(2)
-        store.upsert(chunks)
-        store.upsert(chunks)  # same hashes - should overwrite, not duplicate
-        assert store.count() == 2
-        store.close()
+    def test_bm25_doc_initialized(self, store):
+        s, _, _ = store
+        assert s._bm25_doc is not None
 
-    def test_upsert_empty(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        count = store.upsert([])
-        assert count == 0
-        assert store.count() == 0
-        store.close()
+    def test_bm25_query_initialized(self, store):
+        s, _, _ = store
+        assert s._bm25_query is not None
 
-    def test_delete_by_source(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(3)
-        store.upsert(chunks)
-        store.delete_by_source("test.md")
-        assert store.count() == 0
-        store.close()
-
-    def test_delete_by_hashes(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(3)
-        store.upsert(chunks)
-        store.delete_by_hashes(["hash_0", "hash_1"])
-        assert store.count() == 1
-        store.close()
-
-    def test_delete_by_hashes_empty(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(3)
-        store.upsert(chunks)
-        store.delete_by_hashes([])
-        assert store.count() == 3
-        store.close()
-
-
-# ---------------------------------------------------------------------------
-# Tests: Search
-# ---------------------------------------------------------------------------
-class TestZvecStoreSearch:
-    def test_search_returns_results(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(5)
-        store.upsert(chunks)
-        results = store.search(
-            query_embedding=[1.0] * TEST_DIM,
-            query_text="topic",
-            top_k=3,
-        )
-        assert len(results) <= 3
-        assert all("content" in r for r in results)
-        assert all("score" in r for r in results)
-        store.close()
-
-    def test_search_empty_collection(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        results = store.search(
-            query_embedding=[1.0] * TEST_DIM,
-            query_text="anything",
-            top_k=5,
-        )
-        assert results == []
-        store.close()
-
-    def test_search_dense_only(self, mock_zvec_env):
-        """Search with embedding only, no query text (no hybrid)."""
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(3)
-        store.upsert(chunks)
-        results = store.search(
-            query_embedding=[1.0] * TEST_DIM,
-            query_text="",
-            top_k=2,
-        )
-        assert len(results) <= 2
-        store.close()
-
-
-# ---------------------------------------------------------------------------
-# Tests: Query helpers
-# ---------------------------------------------------------------------------
-class TestZvecStoreQuery:
-    def test_hashes_by_source(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        store.upsert(_sample_chunks(3))
-        hashes = store.hashes_by_source("test.md")
-        assert hashes == {"hash_0", "hash_1", "hash_2"}
-        store.close()
-
-    def test_indexed_sources(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(2)
-        chunks[1]["source"] = "other.md"
-        store.upsert(chunks)
-        sources = store.indexed_sources()
-        assert sources == {"test.md", "other.md"}
-        store.close()
-
-    def test_existing_hashes(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        store.upsert(_sample_chunks(3))
-        found = store.existing_hashes(["hash_0", "hash_1", "nonexistent"])
-        assert found == {"hash_0", "hash_1"}
-        store.close()
-
-    def test_existing_hashes_empty_input(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        store.upsert(_sample_chunks(3))
-        found = store.existing_hashes([])
-        assert found == set()
-        store.close()
-
-
-# ---------------------------------------------------------------------------
-# Tests: Drop
-# ---------------------------------------------------------------------------
-class TestZvecStoreDrop:
-    def test_drop(self, mock_zvec_env):
-        store = _make_store_with_mock(mock_zvec_env)
-        store.upsert(_sample_chunks(3))
-        store.drop()
-        # After drop, the collection should be None
-        assert store._collection is None
-
-
-# ---------------------------------------------------------------------------
-# Tests: Constructor / Init
-# ---------------------------------------------------------------------------
-class TestZvecStoreInit:
-    def test_default_path_expansion(self, mock_zvec_env):
-        """Path should be expanded and include collection name."""
-        store = _make_store_with_mock(mock_zvec_env)
-        assert "test_chunks" in store._path
-        store.close()
-
-    def test_zvec_init_called(self, mock_zvec_env):
-        """zvec.init() should be called during store creation."""
-        zvec_mod, _ = mock_zvec_env
-        _make_store_with_mock(mock_zvec_env)
+    def test_zvec_init_called(self, store):
+        _, _, zvec_mod = store
         zvec_mod.init.assert_called()
 
-    def test_schema_created_with_correct_fields(self, mock_zvec_env):
-        """CollectionSchema should be created with all required fields."""
-        zvec_mod, _ = mock_zvec_env
-        _make_store_with_mock(mock_zvec_env)
-        # Verify create_and_open was called (new collection)
+    def test_create_and_open_called(self, store):
+        _, _, zvec_mod = store
         zvec_mod.create_and_open.assert_called_once()
 
-    def test_close_flushes(self, mock_zvec_env):
-        """close() should flush the collection."""
-        zvec_mod, mock_collection = mock_zvec_env
-        store = _make_store_with_mock(mock_zvec_env)
-        store.close()
-        mock_collection.flush.assert_called()
+    def test_default_reranker_is_rrf(self, store):
+        s, _, _ = store
+        assert s._reranker_type == "rrf"
+
+    def test_default_quantize_type(self, store):
+        s, _, _ = store
+        assert s._quantize_type == "int8"
+
+    def test_initial_count_is_zero(self, store):
+        s, _, _ = store
+        assert s.count() == 0
 
 
 # ---------------------------------------------------------------------------
-# Tests: Upsert creates correct Doc objects
+# Tests: embed_and_upsert
 # ---------------------------------------------------------------------------
-class TestZvecStoreUpsertDetails:
-    def test_upsert_creates_docs_with_correct_fields(self, mock_zvec_env):
-        """Each upserted doc should have the correct id, fields, and vectors."""
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(1)
-        store.upsert(chunks)
+class TestEmbedAndUpsert:
+    def test_returns_count(self, store):
+        s, _, _ = store
+        count = s.embed_and_upsert(_sample_chunks(3))
+        assert count == 3
 
-        # The mock collection stores FakeDoc objects
-        _, mock_collection = mock_zvec_env
-        assert "hash_0" in mock_collection._docs
-        doc = mock_collection._docs["hash_0"]
+    def test_calls_dense_emb_embed(self, store):
+        s, _, _ = store
+        chunks = _sample_chunks(2)
+        s.embed_and_upsert(chunks)
+        assert s._dense_emb.embed.call_count == 2
+
+    def test_calls_bm25_doc_embed(self, store):
+        s, _, _ = store
+        chunks = _sample_chunks(2)
+        s.embed_and_upsert(chunks)
+        assert s._bm25_doc.embed.call_count == 2
+
+    def test_does_not_flush(self, store):
+        s, mock_col, _ = store
+        mock_col.flush.reset_mock()
+        s.embed_and_upsert(_sample_chunks(2))
+        mock_col.flush.assert_not_called()
+
+    def test_empty_chunks_returns_zero(self, store):
+        s, _, _ = store
+        count = s.embed_and_upsert([])
+        assert count == 0
+
+    def test_stores_docs_in_collection(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        assert s.count() == 3
+
+    def test_upsert_is_idempotent(self, store):
+        s, _, _ = store
+        chunks = _sample_chunks(2)
+        s.embed_and_upsert(chunks)
+        s.embed_and_upsert(chunks)  # same hashes
+        assert s.count() == 2
+
+    def test_doc_has_correct_fields(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(1))
+        doc = mock_col._docs["hash_0"]
         assert doc.id == "hash_0"
         assert doc.fields["content"] == "This is test content number 0 about topic 0"
         assert doc.fields["source"] == "test.md"
@@ -436,27 +361,260 @@ class TestZvecStoreUpsertDetails:
         assert doc.fields["heading_level"] == 1
         assert doc.fields["start_line"] == 1
         assert doc.fields["end_line"] == 10
+
+    def test_doc_has_dense_and_sparse_vectors(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(1))
+        doc = mock_col._docs["hash_0"]
         assert "embedding" in doc.vectors
         assert "sparse_embedding" in doc.vectors
-        store.close()
 
-    def test_upsert_calls_bm25_for_sparse_embedding(self, mock_zvec_env):
-        """BM25 document encoder should be called for each chunk's content."""
-        zvec_mod, _ = mock_zvec_env
-        store = _make_store_with_mock(mock_zvec_env)
+    def test_calls_collection_upsert(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(1))
+        mock_col.upsert.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: embed_and_insert
+# ---------------------------------------------------------------------------
+class TestEmbedAndInsert:
+    def test_returns_count(self, store):
+        s, _, _ = store
+        count = s.embed_and_insert(_sample_chunks(3))
+        assert count == 3
+
+    def test_uses_collection_insert(self, store):
+        s, mock_col, _ = store
+        s.embed_and_insert(_sample_chunks(2))
+        mock_col.insert.assert_called_once()
+        mock_col.upsert.assert_not_called()
+
+    def test_does_not_flush(self, store):
+        s, mock_col, _ = store
+        mock_col.flush.reset_mock()
+        s.embed_and_insert(_sample_chunks(2))
+        mock_col.flush.assert_not_called()
+
+    def test_empty_chunks_returns_zero(self, store):
+        s, _, _ = store
+        count = s.embed_and_insert([])
+        assert count == 0
+
+    def test_calls_dense_emb_embed(self, store):
+        s, _, _ = store
+        s.embed_and_insert(_sample_chunks(2))
+        assert s._dense_emb.embed.call_count == 2
+
+
+# ---------------------------------------------------------------------------
+# Tests: Search
+# ---------------------------------------------------------------------------
+class TestSearch:
+    def test_returns_results(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(5))
+        results = s.search("topic", top_k=3)
+        assert len(results) <= 3
+        assert all("content" in r for r in results)
+        assert all("score" in r for r in results)
+
+    def test_empty_collection_returns_empty(self, store):
+        s, _, _ = store
+        results = s.search("anything", top_k=5)
+        assert results == []
+
+    def test_calls_dense_emb_embed_for_query(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(2))
+        s._dense_emb.embed.reset_mock()
+        s.search("test query")
+        s._dense_emb.embed.assert_called_once_with("test query")
+
+    def test_calls_bm25_query_embed(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(2))
+        s.search("test query")
+        s._bm25_query.embed.assert_called()
+
+    def test_uses_rrf_reranker_by_default(self, store):
+        s, _, zvec_mod = store
+        s.embed_and_upsert(_sample_chunks(2))
+        s.search("test query")
+        zvec_mod.RrfReRanker.assert_called()
+
+    def test_result_has_expected_keys(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(2))
+        results = s.search("test")
+        expected_keys = {"content", "source", "heading", "heading_level",
+                         "start_line", "end_line", "chunk_hash", "score"}
+        assert set(results[0].keys()) == expected_keys
+
+    def test_uses_hnsw_query_param(self, store):
+        s, _, zvec_mod = store
+        s.embed_and_upsert(_sample_chunks(2))
+        s.search("test")
+        zvec_mod.HnswQueryParam.assert_called_with(ef=300)
+
+
+# ---------------------------------------------------------------------------
+# Tests: Flush and Optimize
+# ---------------------------------------------------------------------------
+class TestFlushAndOptimize:
+    def test_flush_calls_collection_flush(self, store):
+        s, mock_col, _ = store
+        mock_col.flush.reset_mock()
+        s.flush()
+        mock_col.flush.assert_called_once()
+
+    def test_optimize_calls_collection_optimize(self, store):
+        s, mock_col, _ = store
+        s.optimize()
+        mock_col.optimize.assert_called_once()
+
+    def test_flush_no_collection_does_not_error(self, store):
+        s, _, _ = store
+        s._collection = None
+        s.flush()  # should not raise
+
+    def test_optimize_no_collection_does_not_error(self, store):
+        s, _, _ = store
+        s._collection = None
+        s.optimize()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: Delete Operations
+# ---------------------------------------------------------------------------
+class TestDeleteOperations:
+    def test_delete_by_source(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        s.delete_by_source("test.md")
+        assert s.count() == 0
+
+    def test_delete_by_source_does_not_flush(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        mock_col.flush.reset_mock()
+        s.delete_by_source("test.md")
+        mock_col.flush.assert_not_called()
+
+    def test_delete_by_hashes(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        s.delete_by_hashes(["hash_0", "hash_1"])
+        assert s.count() == 1
+
+    def test_delete_by_hashes_empty(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        s.delete_by_hashes([])
+        assert s.count() == 3
+        mock_col.delete.assert_not_called()
+
+    def test_delete_by_hashes_does_not_flush(self, store):
+        s, mock_col, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        mock_col.flush.reset_mock()
+        s.delete_by_hashes(["hash_0"])
+        mock_col.flush.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Tests: Query and Count
+# ---------------------------------------------------------------------------
+class TestQueryAndCount:
+    def test_count_returns_doc_count(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        assert s.count() == 3
+
+    def test_hashes_by_source(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        hashes = s.hashes_by_source("test.md")
+        assert hashes == {"hash_0", "hash_1", "hash_2"}
+
+    def test_indexed_sources(self, store):
+        s, _, _ = store
         chunks = _sample_chunks(2)
-        store.upsert(chunks)
-        # BM25 doc encoder's embed should be called for each chunk
-        assert store._bm25_doc.embed.call_count == 2
-        store.close()
+        chunks[1]["source"] = "other.md"
+        s.embed_and_upsert(chunks)
+        sources = s.indexed_sources()
+        assert sources == {"test.md", "other.md"}
 
-    def test_upsert_flushes_after_insert(self, mock_zvec_env):
-        """upsert() should call flush() after inserting docs."""
-        _, mock_collection = mock_zvec_env
-        store = _make_store_with_mock(mock_zvec_env)
-        chunks = _sample_chunks(1)
-        # Reset flush call count after init
-        mock_collection.flush.reset_mock()
-        store.upsert(chunks)
-        mock_collection.flush.assert_called()
-        store.close()
+    def test_existing_hashes(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        found = s.existing_hashes(["hash_0", "hash_1", "nonexistent"])
+        assert found == {"hash_0", "hash_1"}
+
+    def test_existing_hashes_empty_input(self, store):
+        s, _, _ = store
+        found = s.existing_hashes([])
+        assert found == set()
+
+    def test_query_with_filter(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        results = s.query(filter_expr='source == "test.md"')
+        assert len(results) == 3
+        assert all("content" in r for r in results)
+
+    def test_query_empty_filter(self, store):
+        s, _, _ = store
+        s.embed_and_upsert(_sample_chunks(3))
+        results = s.query(filter_expr="")
+        assert results == []
+
+
+# ---------------------------------------------------------------------------
+# Tests: Drop and Close
+# ---------------------------------------------------------------------------
+class TestDropAndClose:
+    def test_drop_destroys_collection(self, store):
+        s, mock_col, _ = store
+        s.drop()
+        mock_col.destroy.assert_called_once()
+        assert s._collection is None
+
+    def test_close_flushes_collection(self, store):
+        s, mock_col, _ = store
+        mock_col.flush.reset_mock()
+        s.close()
+        mock_col.flush.assert_called_once()
+        assert s._collection is None
+
+    def test_drop_with_no_collection(self, store):
+        s, _, _ = store
+        s._collection = None
+        s.drop()  # should not raise
+
+    def test_close_with_no_collection(self, store):
+        s, _, _ = store
+        s._collection = None
+        s.close()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: Status checking
+# ---------------------------------------------------------------------------
+class TestCheckStatuses:
+    def test_ok_statuses_no_error(self, store):
+        s, _, _ = store
+        statuses = [FakeStatus(ok=True), FakeStatus(ok=True)]
+        s._check_statuses(statuses, "test")  # should not raise
+
+    def test_failed_status_logs_error(self, store, caplog):
+        import logging
+        s, _, _ = store
+        statuses = [FakeStatus(ok=False, code=1, message="fail")]
+        with caplog.at_level(logging.ERROR, logger="zvecsearch.store"):
+            s._check_statuses(statuses, "upsert")
+        assert "upsert failed" in caplog.text
+
+    def test_none_statuses_no_error(self, store):
+        s, _, _ = store
+        s._check_statuses(None, "test")  # should not raise

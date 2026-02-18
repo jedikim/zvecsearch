@@ -1,0 +1,271 @@
+{
+  "documents": [
+    {
+      "id": "doc_vector_db",
+      "filename": "벡터데이터베이스_개론.md",
+      "content": "# 벡터 데이터베이스 개론\n\n벡터 데이터베이스는 고차원 벡터를 효율적으로 저장하고 검색하는 전문 데이터베이스 시스템입니다.\n전통적인 관계형 데이터베이스와 달리, 유사도 기반 검색에 최적화되어 있습니다.\n\n## HNSW 알고리즘\n\nHNSW(Hierarchical Navigable Small World)는 근사 최근접 이웃 검색 알고리즘입니다.\n다층 그래프 구조를 사용하여 O(log N) 시간 복잡도로 유사 벡터를 찾습니다.\n\n### HNSW 파라미터\n\n- `ef_construction`: 인덱스 구축 시 탐색 범위. 높을수록 정확하지만 느림.\n- `max_m`: 각 노드의 최대 이웃 수. 높을수록 메모리 사용량 증가.\n- `ef_search`: 검색 시 탐색 범위. 정확도-속도 트레이드오프 조절.\n\n## 코사인 유사도\n\n코사인 유사도는 두 벡터 간의 각도를 측정하여 유사도를 계산합니다.\n값의 범위는 -1에서 1까지이며, 1에 가까울수록 유사합니다.\n텍스트 임베딩에서 가장 널리 사용되는 거리 메트릭입니다.\n\n## 스파스 벡터와 BM25\n\nBM25는 전통적인 키워드 기반 검색 알고리즘으로, 용어 빈도(TF)와 역문서 빈도(IDF)를 결합합니다.\n스파스 벡터로 표현되며, 밀집 벡터와 결합하여 하이브리드 검색에 사용됩니다.\n\n## 하이브리드 검색\n\n하이브리드 검색은 밀집 벡터(Dense)와 스파스 벡터(Sparse)를 결합한 검색 방식입니다.\nRRF(Reciprocal Rank Fusion)를 사용하여 두 검색 결과를 융합합니다.\nRRF의 k 파라미터(기본값 60)는 순위 융합의 감쇠율을 제어합니다.\n\n## 인덱스 유형\n\n### HNSW 인덱스\n\n대규모 데이터에 적합한 그래프 기반 인덱스입니다.\n메모리 사용량이 높지만 검색 속도와 정확도가 우수합니다.\n\n### IVF 인덱스\n\nInverted File Index는 클러스터 기반 인덱스입니다.\nHNSW보다 메모리 효율적이지만 정확도가 낮을 수 있습니다.\n\n### Flat 인덱스\n\n전수 검색(Brute-force)을 수행하는 인덱스입니다.\n100% 정확도를 보장하지만 대규모 데이터에서는 느립니다."
+    },
+    {
+      "id": "doc_nlp",
+      "filename": "자연어처리_기초.md",
+      "content": "# 자연어처리 기초\n\n자연어처리(NLP, Natural Language Processing)는 컴퓨터가 인간의 언어를 이해하고 생성하는 기술입니다.\n\n## 토큰화\n\n토큰화(Tokenization)는 텍스트를 의미 있는 단위(토큰)로 분할하는 과정입니다.\n한국어는 형태소 분석이 필요하며, 띄어쓰기만으로는 정확한 토큰화가 어렵습니다.\n\n### 서브워드 토큰화\n\nBPE(Byte Pair Encoding)와 WordPiece는 대표적인 서브워드 토큰화 방법입니다.\n미등록어(OOV) 문제를 해결하고 어휘 크기를 효율적으로 관리합니다.\n\n### 한국어 토큰화의 특수성\n\n한국어는 교착어로서 조사, 어미 등이 어근에 결합됩니다.\n형태소 분석기(MeCab, Komoran, Okt 등)를 사용하면 더 정확한 토큰화가 가능합니다.\n\n## 트랜스포머 아키텍처\n\n트랜스포머(Transformer)는 2017년 \"Attention Is All You Need\" 논문에서 제안되었습니다.\n셀프 어텐션(Self-Attention) 메커니즘을 핵심으로 사용합니다.\n\n### 어텐션 메커니즘\n\n어텐션은 입력 시퀀스의 각 위치가 다른 모든 위치를 참조할 수 있게 합니다.\nQuery, Key, Value 행렬을 사용하여 가중치를 계산합니다.\n멀티헤드 어텐션은 여러 어텐션을 병렬로 수행하여 다양한 관계를 포착합니다.\n\n### 인코더-디코더 구조\n\n인코더는 입력 텍스트를 벡터 표현으로 변환합니다.\n디코더는 벡터 표현을 출력 텍스트로 변환합니다.\nBERT는 인코더만, GPT는 디코더만 사용하는 대표적인 모델입니다.\n\n## 사전 학습과 파인튜닝\n\n대규모 코퍼스에서 사전 학습(Pre-training)을 수행한 후,\n특정 작업에 맞게 파인튜닝(Fine-tuning)하는 것이 현대 NLP의 표준입니다.\n\n### 한국어 사전 학습 모델\n\n- KoBERT: SKT에서 개발한 한국어 BERT\n- KoGPT: 카카오브레인의 한국어 GPT\n- HyperCLOVA: 네이버의 대규모 한국어 언어 모델\n- EXAONE: LG AI Research의 한국어 모델"
+    },
+    {
+      "id": "doc_embedding",
+      "filename": "임베딩_기술_가이드.md",
+      "content": "# 임베딩 기술 가이드\n\n임베딩(Embedding)은 텍스트, 이미지 등의 데이터를 고정 길이 벡터로 변환하는 기술입니다.\n\n## 텍스트 임베딩\n\n텍스트 임베딩은 단어, 문장, 문서를 밀집 벡터(Dense Vector)로 변환합니다.\n의미적으로 유사한 텍스트는 벡터 공간에서 가까운 위치에 매핑됩니다.\n\n### OpenAI 임베딩\n\nOpenAI의 `text-embedding-3-small` 모델은 1536차원 벡터를 생성합니다.\nAPI 호출을 통해 사용하며, 한국어를 포함한 다국어를 지원합니다.\n비용 효율적이면서도 높은 품질의 임베딩을 제공합니다.\n\n### 로컬 임베딩 모델\n\n`sentence-transformers` 라이브러리를 사용하면 로컬에서 임베딩을 생성할 수 있습니다.\n`all-MiniLM-L6-v2` 모델은 384차원 벡터를 생성하며 빠른 추론 속도를 제공합니다.\n인터넷 연결 없이 사용할 수 있어 프라이버시가 중요한 환경에 적합합니다.\n\n### 한국어 특화 임베딩\n\n한국어에 특화된 임베딩 모델로는 `ko-sroberta-multitask`가 있습니다.\n한국어 문장 유사도 작업에서 범용 모델보다 더 나은 성능을 보입니다.\n\n## 임베딩 차원과 성능\n\n임베딩 차원이 높을수록 더 많은 정보를 인코딩할 수 있습니다.\n하지만 저장 비용과 검색 시간이 증가하는 트레이드오프가 있습니다.\n일반적으로 384~1536 차원이 실용적인 범위입니다.\n\n## 임베딩 정규화\n\n벡터를 L2 정규화하면 코사인 유사도 계산이 내적(dot product)으로 단순화됩니다.\n대부분의 임베딩 모델은 이미 정규화된 벡터를 출력합니다.\n\n## 배치 임베딩\n\n대량의 텍스트를 임베딩할 때는 배치 처리가 효율적입니다.\n일반적으로 32~128개의 텍스트를 한 번에 처리합니다.\nAPI 기반 모델은 요청 제한(rate limit)을 고려해야 합니다."
+    },
+    {
+      "id": "doc_chunking",
+      "filename": "청킹_전략.md",
+      "content": "# 청킹 전략\n\n청킹(Chunking)은 긴 문서를 검색에 적합한 작은 단위로 분할하는 과정입니다.\n\n## 마크다운 기반 청킹\n\n마크다운 헤딩(#, ##, ### 등)을 기준으로 문서를 분할합니다.\n각 섹션이 하나의 의미적 단위가 되어 검색 정확도가 높아집니다.\n문서의 계층 구조를 보존하여 컨텍스트를 유지합니다.\n\n### 청크 크기 설정\n\n`max_chunk_size`는 단일 청크의 최대 문자 수를 제한합니다.\n너무 크면 관련 없는 내용이 포함되고, 너무 작으면 맥락을 잃습니다.\n일반적으로 500~2000자가 적절한 범위입니다.\n\n### 오버랩 설정\n\n`overlap_lines`는 인접 청크 간 겹치는 줄 수를 설정합니다.\n오버랩을 통해 청크 경계에서의 정보 손실을 방지합니다.\n2~5줄의 오버랩이 일반적으로 권장됩니다.\n\n## 시맨틱 청킹\n\n시맨틱 청킹은 의미적 유사성을 기반으로 문장을 그룹화합니다.\n인접 문장의 임베딩 유사도가 임계값 이하로 떨어지면 분할합니다.\n마크다운 기반 청킹보다 정확하지만 계산 비용이 높습니다.\n\n## 증분 인덱싱\n\n증분 인덱싱은 변경된 청크만 다시 임베딩하는 전략입니다.\nSHA-256 해시를 사용하여 내용 변경을 감지합니다.\n변경되지 않은 청크는 재처리하지 않아 효율적입니다.\n\n### 스테일 청크 정리\n\n파일이 수정되면 이전 버전의 청크(스테일 청크)를 식별합니다.\n새 청크 ID 집합과 기존 ID 집합을 비교하여 삭제 대상을 결정합니다.\n이를 통해 인덱스의 정확성을 유지합니다.\n\n## 한국어 청킹 고려사항\n\n한국어는 띄어쓰기가 불규칙할 수 있어 줄 단위 분할에 주의가 필요합니다.\n교착어 특성상 조사가 붙은 단어도 올바르게 처리해야 합니다.\n한영 혼합 문서에서는 양쪽 언어 모두 올바르게 보존되어야 합니다."
+    },
+    {
+      "id": "doc_korean_ai",
+      "filename": "한국어_AI_모델.md",
+      "content": "# 한국어 AI 모델 현황\n\n한국어에 특화된 AI 모델들이 활발하게 개발되고 있습니다.\n\n## 대규모 언어 모델\n\n### HyperCLOVA X\n\n네이버에서 개발한 대규모 한국어 언어 모델입니다.\n한국어 이해와 생성에서 뛰어난 성능을 보입니다.\n네이버 서비스 전반에 통합되어 활용되고 있습니다.\n\n### EXAONE\n\nLG AI Research에서 개발한 멀티모달 AI 모델입니다.\n텍스트뿐만 아니라 이미지, 코드 등 다양한 모달리티를 처리합니다.\n한국어와 영어 모두에서 우수한 성능을 달성했습니다.\n\n### Solar\n\n업스테이지(Upstage)에서 개발한 경량 고성능 언어 모델입니다.\nDepth Up-Scaling 기법으로 효율적인 모델 확장을 달성했습니다.\n오픈소스로 공개되어 연구 및 상업적 활용이 가능합니다.\n\n## 한국어 임베딩 모델\n\n### KoSimCSE\n\n한국어 문장 임베딩에 특화된 모델입니다.\nContrastive Learning을 활용하여 문장 유사도 성능을 향상시켰습니다.\nSTS(Semantic Textual Similarity) 벤치마크에서 높은 점수를 기록합니다.\n\n### KLUE-RoBERTa\n\nKLUE(Korean Language Understanding Evaluation) 벤치마크를 위해 학습된 모델입니다.\n8개의 한국어 NLU 과제에서 종합적으로 평가되었습니다.\n한국어 텍스트 분류, 개체명 인식 등 다양한 작업에 활용됩니다.\n\n## 벤치마크와 평가\n\n### KLUE 벤치마크\n\nKLUE는 한국어 자연어 이해 평가를 위한 종합 벤치마크입니다.\n8개 과제: TC, STS, NLI, NER, RE, DP, MRC, DST를 포함합니다.\n한국어 모델의 표준 평가 기준으로 널리 사용됩니다.\n\n### KorQuAD\n\nKorQuAD는 한국어 기계 독해(MRC) 데이터셋입니다.\n위키백과 기반 질문-답변 쌍으로 구성되어 있습니다.\n모델의 한국어 독해 능력을 평가하는 데 사용됩니다.\n\n## 모델 선택 가이드\n\n용도에 따라 적절한 모델을 선택하는 것이 중요합니다.\n임베딩 작업에는 KoSimCSE나 ko-sroberta를 권장합니다.\n텍스트 생성에는 HyperCLOVA X나 Solar를 고려할 수 있습니다.\n분류/분석 작업에는 KLUE-RoBERTa가 적합합니다."
+    }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "question": "HNSW 알고리즘의 주요 파라미터는 무엇인가?",
+      "expected_answer": "ef_construction (인덱스 구축 시 탐색 범위), max_m (노드의 최대 이웃 수), ef_search (검색 시 탐색 범위)가 주요 파라미터입니다.",
+      "relevant_doc_ids": ["doc_vector_db"],
+      "relevant_headings": ["HNSW 파라미터"],
+      "relevant_keywords": ["ef_construction", "max_m", "ef_search", "HNSW"]
+    },
+    {
+      "id": "q02",
+      "question": "코사인 유사도란 무엇이며 값의 범위는?",
+      "expected_answer": "코사인 유사도는 두 벡터 간의 각도를 측정하여 유사도를 계산하며, 값의 범위는 -1에서 1까지입니다.",
+      "relevant_doc_ids": ["doc_vector_db"],
+      "relevant_headings": ["코사인 유사도"],
+      "relevant_keywords": ["코사인", "유사도", "각도", "벡터"]
+    },
+    {
+      "id": "q03",
+      "question": "하이브리드 검색에서 RRF란 무엇인가?",
+      "expected_answer": "RRF(Reciprocal Rank Fusion)는 밀집 벡터와 스파스 벡터의 검색 결과를 융합하는 방식으로, k 파라미터(기본값 60)로 순위 융합의 감쇠율을 제어합니다.",
+      "relevant_doc_ids": ["doc_vector_db"],
+      "relevant_headings": ["하이브리드 검색"],
+      "relevant_keywords": ["RRF", "Reciprocal Rank Fusion", "하이브리드", "밀집", "스파스"]
+    },
+    {
+      "id": "q04",
+      "question": "BM25 알고리즘은 어떤 요소를 결합하는가?",
+      "expected_answer": "BM25는 용어 빈도(TF)와 역문서 빈도(IDF)를 결합하는 키워드 기반 검색 알고리즘입니다.",
+      "relevant_doc_ids": ["doc_vector_db"],
+      "relevant_headings": ["스파스 벡터와 BM25"],
+      "relevant_keywords": ["BM25", "TF", "IDF", "용어 빈도", "역문서 빈도"]
+    },
+    {
+      "id": "q05",
+      "question": "HNSW, IVF, Flat 인덱스의 차이점은?",
+      "expected_answer": "HNSW는 그래프 기반으로 빠르지만 메모리 사용량이 높고, IVF는 클러스터 기반으로 메모리 효율적이며, Flat은 전수 검색으로 100% 정확하지만 느립니다.",
+      "relevant_doc_ids": ["doc_vector_db"],
+      "relevant_headings": ["인덱스 유형", "HNSW 인덱스", "IVF 인덱스", "Flat 인덱스"],
+      "relevant_keywords": ["HNSW", "IVF", "Flat", "인덱스", "그래프", "클러스터"]
+    },
+    {
+      "id": "q06",
+      "question": "한국어 토큰화가 어려운 이유는?",
+      "expected_answer": "한국어는 교착어로서 조사, 어미 등이 어근에 결합되며, 띄어쓰기만으로는 정확한 토큰화가 어렵습니다.",
+      "relevant_doc_ids": ["doc_nlp"],
+      "relevant_headings": ["한국어 토큰화의 특수성"],
+      "relevant_keywords": ["한국어", "토큰화", "교착어", "조사", "어미", "형태소"]
+    },
+    {
+      "id": "q07",
+      "question": "서브워드 토큰화 방법에는 어떤 것이 있는가?",
+      "expected_answer": "BPE(Byte Pair Encoding)와 WordPiece가 대표적인 서브워드 토큰화 방법으로, 미등록어 문제를 해결합니다.",
+      "relevant_doc_ids": ["doc_nlp"],
+      "relevant_headings": ["서브워드 토큰화"],
+      "relevant_keywords": ["BPE", "WordPiece", "서브워드", "미등록어", "OOV"]
+    },
+    {
+      "id": "q08",
+      "question": "트랜스포머의 핵심 메커니즘은 무엇인가?",
+      "expected_answer": "셀프 어텐션(Self-Attention) 메커니즘으로, Query, Key, Value 행렬을 사용하여 가중치를 계산합니다.",
+      "relevant_doc_ids": ["doc_nlp"],
+      "relevant_headings": ["어텐션 메커니즘", "트랜스포머 아키텍처"],
+      "relevant_keywords": ["어텐션", "Self-Attention", "Query", "Key", "Value", "트랜스포머"]
+    },
+    {
+      "id": "q09",
+      "question": "BERT와 GPT의 구조적 차이점은?",
+      "expected_answer": "BERT는 인코더만 사용하고, GPT는 디코더만 사용합니다.",
+      "relevant_doc_ids": ["doc_nlp"],
+      "relevant_headings": ["인코더-디코더 구조"],
+      "relevant_keywords": ["BERT", "GPT", "인코더", "디코더"]
+    },
+    {
+      "id": "q10",
+      "question": "한국어 사전 학습 모델에는 어떤 것이 있는가?",
+      "expected_answer": "KoBERT(SKT), KoGPT(카카오브레인), HyperCLOVA(네이버), EXAONE(LG AI Research) 등이 있습니다.",
+      "relevant_doc_ids": ["doc_nlp", "doc_korean_ai"],
+      "relevant_headings": ["한국어 사전 학습 모델", "대규모 언어 모델"],
+      "relevant_keywords": ["KoBERT", "KoGPT", "HyperCLOVA", "EXAONE", "한국어"]
+    },
+    {
+      "id": "q11",
+      "question": "OpenAI 임베딩 모델의 차원 수는?",
+      "expected_answer": "text-embedding-3-small 모델은 1536차원 벡터를 생성합니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["OpenAI 임베딩"],
+      "relevant_keywords": ["OpenAI", "1536", "text-embedding-3-small", "차원"]
+    },
+    {
+      "id": "q12",
+      "question": "로컬에서 임베딩을 생성하려면 어떤 라이브러리를 사용하는가?",
+      "expected_answer": "sentence-transformers 라이브러리를 사용하며, all-MiniLM-L6-v2 모델은 384차원 벡터를 생성합니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["로컬 임베딩 모델"],
+      "relevant_keywords": ["sentence-transformers", "all-MiniLM-L6-v2", "384", "로컬"]
+    },
+    {
+      "id": "q13",
+      "question": "임베딩 차원이 높을수록 좋은가?",
+      "expected_answer": "차원이 높으면 더 많은 정보를 인코딩할 수 있지만, 저장 비용과 검색 시간이 증가하는 트레이드오프가 있습니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["임베딩 차원과 성능"],
+      "relevant_keywords": ["차원", "트레이드오프", "저장", "검색"]
+    },
+    {
+      "id": "q14",
+      "question": "벡터 정규화의 이점은?",
+      "expected_answer": "L2 정규화하면 코사인 유사도 계산이 내적으로 단순화됩니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["임베딩 정규화"],
+      "relevant_keywords": ["정규화", "L2", "코사인", "내적"]
+    },
+    {
+      "id": "q15",
+      "question": "배치 임베딩의 적절한 크기는?",
+      "expected_answer": "일반적으로 32~128개의 텍스트를 한 번에 처리하며, API 기반 모델은 요청 제한을 고려해야 합니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["배치 임베딩"],
+      "relevant_keywords": ["배치", "32", "128", "rate limit"]
+    },
+    {
+      "id": "q16",
+      "question": "마크다운 기반 청킹의 장점은?",
+      "expected_answer": "헤딩을 기준으로 분할하여 각 섹션이 하나의 의미적 단위가 되고, 문서의 계층 구조를 보존합니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["마크다운 기반 청킹"],
+      "relevant_keywords": ["마크다운", "헤딩", "의미적 단위", "계층 구조"]
+    },
+    {
+      "id": "q17",
+      "question": "적절한 청크 크기는 얼마인가?",
+      "expected_answer": "일반적으로 500~2000자가 적절하며, 너무 크면 관련 없는 내용이 포함되고 너무 작으면 맥락을 잃습니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["청크 크기 설정"],
+      "relevant_keywords": ["max_chunk_size", "500", "2000", "청크 크기"]
+    },
+    {
+      "id": "q18",
+      "question": "오버랩 설정은 왜 필요한가?",
+      "expected_answer": "인접 청크 간 겹치는 줄을 설정하여 청크 경계에서의 정보 손실을 방지합니다. 2~5줄이 권장됩니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["오버랩 설정"],
+      "relevant_keywords": ["overlap", "오버랩", "겹치는", "정보 손실"]
+    },
+    {
+      "id": "q19",
+      "question": "증분 인덱싱은 어떻게 작동하는가?",
+      "expected_answer": "SHA-256 해시로 내용 변경을 감지하여 변경된 청크만 다시 임베딩하고, 변경되지 않은 청크는 건너뜁니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["증분 인덱싱"],
+      "relevant_keywords": ["증분", "SHA-256", "해시", "변경 감지"]
+    },
+    {
+      "id": "q20",
+      "question": "스테일 청크란 무엇인가?",
+      "expected_answer": "파일 수정 시 이전 버전의 청크로, 새 청크 ID 집합과 기존 ID를 비교하여 삭제합니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["스테일 청크 정리"],
+      "relevant_keywords": ["스테일", "이전 버전", "삭제", "청크 ID"]
+    },
+    {
+      "id": "q21",
+      "question": "HyperCLOVA X는 어디서 개발했는가?",
+      "expected_answer": "네이버에서 개발한 대규모 한국어 언어 모델입니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["HyperCLOVA X"],
+      "relevant_keywords": ["HyperCLOVA", "네이버", "한국어"]
+    },
+    {
+      "id": "q22",
+      "question": "Solar 모델의 특징은?",
+      "expected_answer": "업스테이지에서 개발했으며, Depth Up-Scaling 기법으로 효율적 모델 확장을 달성하고 오픈소스로 공개되었습니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["Solar"],
+      "relevant_keywords": ["Solar", "업스테이지", "Depth Up-Scaling", "오픈소스"]
+    },
+    {
+      "id": "q23",
+      "question": "KoSimCSE는 어떤 학습 방법을 사용하는가?",
+      "expected_answer": "Contrastive Learning을 활용하여 한국어 문장 유사도 성능을 향상시켰습니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["KoSimCSE"],
+      "relevant_keywords": ["KoSimCSE", "Contrastive Learning", "문장 유사도"]
+    },
+    {
+      "id": "q24",
+      "question": "KLUE 벤치마크는 몇 개의 과제를 포함하는가?",
+      "expected_answer": "8개 과제: TC, STS, NLI, NER, RE, DP, MRC, DST를 포함합니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["KLUE 벤치마크"],
+      "relevant_keywords": ["KLUE", "8개", "TC", "STS", "NLI", "NER"]
+    },
+    {
+      "id": "q25",
+      "question": "한국어 기계 독해 데이터셋은?",
+      "expected_answer": "KorQuAD는 위키백과 기반 질문-답변 쌍으로 구성된 한국어 기계 독해 데이터셋입니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["KorQuAD"],
+      "relevant_keywords": ["KorQuAD", "기계 독해", "위키백과", "질문-답변"]
+    },
+    {
+      "id": "q26",
+      "question": "시맨틱 청킹과 마크다운 청킹의 차이는?",
+      "expected_answer": "시맨틱 청킹은 임베딩 유사도 기반으로 분할하여 더 정확하지만 계산 비용이 높고, 마크다운 청킹은 헤딩 기준으로 분할합니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["시맨틱 청킹", "마크다운 기반 청킹"],
+      "relevant_keywords": ["시맨틱", "마크다운", "임베딩 유사도", "헤딩"]
+    },
+    {
+      "id": "q27",
+      "question": "한국어 청킹에서 주의할 점은?",
+      "expected_answer": "한국어는 띄어쓰기가 불규칙할 수 있고, 교착어 특성상 조사가 붙은 단어도 올바르게 처리해야 합니다.",
+      "relevant_doc_ids": ["doc_chunking"],
+      "relevant_headings": ["한국어 청킹 고려사항"],
+      "relevant_keywords": ["한국어", "띄어쓰기", "교착어", "조사"]
+    },
+    {
+      "id": "q28",
+      "question": "임베딩 작업에 권장되는 한국어 모델은?",
+      "expected_answer": "KoSimCSE나 ko-sroberta를 권장합니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["모델 선택 가이드"],
+      "relevant_keywords": ["KoSimCSE", "ko-sroberta", "임베딩"]
+    },
+    {
+      "id": "q29",
+      "question": "한국어 특화 임베딩 모델의 이름은?",
+      "expected_answer": "ko-sroberta-multitask가 한국어에 특화된 임베딩 모델입니다.",
+      "relevant_doc_ids": ["doc_embedding"],
+      "relevant_headings": ["한국어 특화 임베딩"],
+      "relevant_keywords": ["ko-sroberta-multitask", "한국어 특화"]
+    },
+    {
+      "id": "q30",
+      "question": "EXAONE 모델은 어떤 모달리티를 처리하는가?",
+      "expected_answer": "텍스트, 이미지, 코드 등 다양한 모달리티를 처리하는 멀티모달 AI 모델입니다.",
+      "relevant_doc_ids": ["doc_korean_ai"],
+      "relevant_headings": ["EXAONE"],
+      "relevant_keywords": ["EXAONE", "멀티모달", "텍스트", "이미지", "코드"]
+    }
+  ]
+}

@@ -2,10 +2,74 @@
 from __future__ import annotations
 
 import logging
+import os
+from functools import lru_cache
 from pathlib import Path
+
 import zvec
 
 logger = logging.getLogger(__name__)
+
+
+class GeminiDenseEmbedding:
+    """Google Gemini dense embedding — zvec DenseEmbeddingFunction Protocol 호환.
+
+    zvec의 ``DenseEmbeddingFunction`` Protocol을 구현하여, ``OpenAIDenseEmbedding``
+    자리에 그대로 사용할 수 있습니다.
+
+    Args:
+        model: Gemini 임베딩 모델. 기본값 ``"gemini-embedding-001"``.
+        dimension: 출력 벡터 차원. 기본값 768.
+        api_key: Google API 키. None이면 ``GOOGLE_API_KEY`` 환경변수 사용.
+    """
+
+    def __init__(
+        self,
+        model: str = "gemini-embedding-001",
+        dimension: int = 768,
+        api_key: str | None = None,
+    ):
+        try:
+            from google import genai  # noqa: F811
+        except ImportError as exc:
+            raise ImportError(
+                "google-genai package required for Gemini embedding. "
+                "Install with: pip install google-genai"
+            ) from exc
+
+        resolved_key = api_key or os.environ.get("GOOGLE_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Google API key required. Set GOOGLE_API_KEY environment variable "
+                "or pass api_key parameter."
+            )
+
+        self._model = model
+        self._dimension = dimension
+        self._client = genai.Client(api_key=resolved_key)
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    def __call__(self, input: str) -> list[float]:
+        return self.embed(input)
+
+    @lru_cache(maxsize=10)
+    def embed(self, input: str) -> list[float]:
+        """텍스트를 Gemini 임베딩 벡터로 변환."""
+        if not isinstance(input, str):
+            raise TypeError(f"Expected 'input' to be str, got {type(input).__name__}")
+        input = input.strip()
+        if not input:
+            raise ValueError("Input text cannot be empty or whitespace only")
+
+        result = self._client.models.embed_content(
+            model=self._model,
+            contents=[input],
+            config={"output_dimensionality": self._dimension},
+        )
+        return result.embeddings[0].values
 
 _QUERY_FIELDS = [
     "content", "source", "heading", "chunk_hash",
@@ -58,8 +122,12 @@ class ZvecStore:
         self._sparse_weight = sparse_weight
         self._collection = None
 
-        # zvec built-in embedding functions
-        self._dense_emb = zvec.OpenAIDenseEmbedding(model=embedding_model)
+        # Dense embedding: provider별 선택
+        if embedding_provider == "google":
+            self._dense_emb = GeminiDenseEmbedding(model=embedding_model)
+        else:
+            self._dense_emb = zvec.OpenAIDenseEmbedding(model=embedding_model)
+        # Sparse embedding: BM25 (zvec-native)
         self._bm25_doc = zvec.BM25EmbeddingFunction(encoding_type="document")
         self._bm25_query = zvec.BM25EmbeddingFunction(encoding_type="query")
 
@@ -90,7 +158,10 @@ class ZvecStore:
             self._collection = zvec.create_and_open(self._path, schema)
 
     def _build_schema(self):
-        dim = self._dense_emb.dim if hasattr(self._dense_emb, 'dim') else 1536
+        dim = getattr(
+            self._dense_emb, "dimension",
+            getattr(self._dense_emb, "dim", 1536),
+        )
         hnsw_kwargs = {
             "metric_type": _METRIC_MAP.get("cosine", zvec.MetricType.COSINE),
             "m": self._hnsw_m,

@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+google = ["google-genai>=1.0"]
 anthropic = ["anthropic>=0.40"]
 dev = [
     "pytest>=8.0",

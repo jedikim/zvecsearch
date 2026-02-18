@@ -78,7 +78,7 @@ _zvec_stub.Doc = FakeDoc
 # Patch zvec in sys.modules before importing store
 sys.modules["zvec"] = _zvec_stub
 
-from zvecsearch.store import ZvecStore  # noqa: E402
+from zvecsearch.store import ZvecStore, GeminiDenseEmbedding  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -618,3 +618,176 @@ class TestCheckStatuses:
     def test_none_statuses_no_error(self, store):
         s, _, _ = store
         s._check_statuses(None, "test")  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# Tests: GeminiDenseEmbedding
+# ---------------------------------------------------------------------------
+class TestGeminiDenseEmbedding:
+    """GeminiDenseEmbedding 단위 테스트 (google-genai는 mock)."""
+
+    def _make_mock_genai(self, embedding_values=None):
+        """google.genai mock을 만들어 반환 (google_mock, genai_mock) 튜플."""
+        if embedding_values is None:
+            embedding_values = [0.1] * 768
+
+        mock_genai = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.values = embedding_values
+        mock_result = MagicMock()
+        mock_result.embeddings = [mock_embedding]
+        mock_genai.Client.return_value.models.embed_content.return_value = mock_result
+
+        # from google import genai → sys.modules["google"].genai
+        mock_google = MagicMock()
+        mock_google.genai = mock_genai
+        return mock_google, mock_genai
+
+    def test_requires_api_key(self):
+        """API 키 없으면 ValueError."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("os.environ", {}, clear=True), \
+             patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            with pytest.raises(ValueError, match="Google API key required"):
+                GeminiDenseEmbedding(api_key=None)
+
+    def test_accepts_explicit_api_key(self):
+        """명시적 api_key 전달 시 정상 생성."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="test-key")
+            assert emb.dimension == 768
+
+    def test_reads_env_api_key(self):
+        """GOOGLE_API_KEY 환경변수에서 키 읽기."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("os.environ", {"GOOGLE_API_KEY": "env-key"}), \
+             patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding()
+            assert emb.dimension == 768
+
+    def test_dimension_property(self):
+        """dimension property가 설정값을 반환."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="k", dimension=512)
+            assert emb.dimension == 512
+
+    def test_embed_returns_vector(self):
+        """embed()가 float 리스트를 반환."""
+        expected = [0.5] * 768
+        mock_google, mock_genai = self._make_mock_genai(embedding_values=expected)
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="k")
+            result = emb.embed("테스트 문장")
+            assert result == expected
+
+    def test_embed_calls_genai_api(self):
+        """embed()가 genai API를 올바른 파라미터로 호출."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(model="gemini-embedding-001", dimension=768, api_key="k")
+            emb.embed("hello world")
+            emb._client.models.embed_content.assert_called_once_with(
+                model="gemini-embedding-001",
+                contents=["hello world"],
+                config={"output_dimensionality": 768},
+            )
+
+    def test_embed_rejects_non_string(self):
+        """비문자열 입력 시 TypeError."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="k")
+            with pytest.raises(TypeError, match="Expected 'input' to be str"):
+                emb.embed(123)
+
+    def test_embed_rejects_empty_string(self):
+        """빈 문자열 입력 시 ValueError."""
+        mock_google, mock_genai = self._make_mock_genai()
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="k")
+            with pytest.raises(ValueError, match="empty or whitespace"):
+                emb.embed("   ")
+
+    def test_callable(self):
+        """__call__이 embed()를 호출."""
+        expected = [0.1] * 768
+        mock_google, mock_genai = self._make_mock_genai(embedding_values=expected)
+        with patch.dict("sys.modules", {"google": mock_google, "google.genai": mock_genai}):
+            emb = GeminiDenseEmbedding(api_key="k")
+            result = emb("테스트")
+            assert result == expected
+
+    def test_import_error_without_genai(self):
+        """google-genai 미설치 시 ImportError."""
+        import builtins
+        real_import = builtins.__import__
+
+        def mock_import(name, *args, **kwargs):
+            if name == "google" or name == "google.genai":
+                raise ImportError("No module named 'google'")
+            return real_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=mock_import):
+            with pytest.raises(ImportError, match="google-genai"):
+                GeminiDenseEmbedding(api_key="k")
+
+
+class TestStoreGeminiProvider:
+    """ZvecStore에서 provider='google' 선택 시 GeminiDenseEmbedding 사용 확인."""
+
+    def test_google_provider_uses_gemini_embedding(self):
+        """embedding_provider='google'일 때 GeminiDenseEmbedding 인스턴스 사용."""
+        import zvecsearch.store as store_module
+        store_module._zvec_initialized = False
+
+        mock_collection = _make_mock_collection()
+        mock_genai = MagicMock()
+        mock_embedding = MagicMock()
+        mock_embedding.values = [0.1] * 768
+        mock_result = MagicMock()
+        mock_result.embeddings = [mock_embedding]
+        mock_genai.Client.return_value.models.embed_content.return_value = mock_result
+
+        with patch("zvecsearch.store.zvec") as zvec_mod, \
+             patch.dict("os.environ", {"GOOGLE_API_KEY": "test-key"}), \
+             patch.dict("sys.modules", {"google": MagicMock(), "google.genai": mock_genai}):
+            zvec_mod.DataType = _zvec_stub.DataType
+            zvec_mod.MetricType = _zvec_stub.MetricType
+            zvec_mod.LogLevel = _zvec_stub.LogLevel
+            zvec_mod.FieldSchema = MagicMock
+            zvec_mod.VectorSchema = MagicMock
+            zvec_mod.CollectionSchema = MagicMock
+            zvec_mod.CollectionOption = MagicMock
+            zvec_mod.HnswIndexParam = MagicMock
+            zvec_mod.InvertIndexParam = MagicMock
+            zvec_mod.VectorQuery = MagicMock
+            zvec_mod.RrfReRanker = MagicMock()
+            zvec_mod.WeightedReRanker = MagicMock()
+            zvec_mod.HnswQueryParam = MagicMock()
+            zvec_mod.Doc = FakeDoc
+
+            bm25_doc = MagicMock()
+            bm25_doc.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            bm25_query = MagicMock()
+            bm25_query.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            _bm25_iter = iter([bm25_doc, bm25_query])
+            zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_iter))
+
+            zvec_mod.create_and_open.return_value = mock_collection
+            zvec_mod.open.return_value = mock_collection
+            zvec_mod.init.return_value = None
+
+            s = ZvecStore(
+                path=str(TEST_DB),
+                collection="test_gemini",
+                embedding_provider="google",
+                embedding_model="gemini-embedding-001",
+            )
+
+            assert isinstance(s._dense_emb, GeminiDenseEmbedding)
+            assert s._dense_emb.dimension == 768
+
+            # OpenAIDenseEmbedding은 호출되지 않아야 함
+            zvec_mod.OpenAIDenseEmbedding.assert_not_called()

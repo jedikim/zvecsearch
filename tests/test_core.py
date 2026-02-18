@@ -7,12 +7,11 @@ and the embedding provider to test orchestration logic in isolation.
 """
 from __future__ import annotations
 
-import asyncio
 import sys
 import pytest
 import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Mock zvec in sys.modules before any import of store.py / core.py
@@ -41,8 +40,7 @@ if "zvec" not in sys.modules:
     _zvec_mock.Doc = MagicMock
     sys.modules["zvec"] = _zvec_mock
 
-from zvecsearch.chunker import Chunk, chunk_markdown, compute_chunk_id  # noqa: E402
-from zvecsearch.scanner import ScannedFile  # noqa: E402
+from zvecsearch.chunker import chunk_markdown, compute_chunk_id  # noqa: E402
 from zvecsearch.core import ZvecSearch  # noqa: E402
 
 TEST_DB = Path("/tmp/zvecsearch_test_core")
@@ -430,7 +428,7 @@ class TestZvecSearchWatch:
              patch("zvecsearch.core.FileWatcher") as mock_fw:
             mock_fw.return_value = MagicMock()
             zs = ZvecSearch(paths=[str(md_dir)], zvec_path=str(TEST_DB))
-            watcher = zs.watch()
+            zs.watch()
             mock_fw.assert_called_once()
             zs.close()
 

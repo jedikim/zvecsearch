@@ -1,6 +1,4 @@
-import pytest
 import time
-from pathlib import Path
 from zvecsearch.watcher import FileWatcher
 
 

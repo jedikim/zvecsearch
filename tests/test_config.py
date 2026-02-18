@@ -1,8 +1,6 @@
-import pytest
 from pathlib import Path
 from zvecsearch.config import (
-    ZvecConfig, EmbeddingConfig, CompactConfig, ChunkingConfig,
-    WatchConfig, IndexConfig, ZvecSearchConfig,
+    ZvecSearchConfig,
     load_config_file, deep_merge, resolve_config,
     config_to_dict, get_config_value, save_config,
 )

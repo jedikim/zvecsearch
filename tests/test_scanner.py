@@ -1,6 +1,5 @@
 import pytest
-from pathlib import Path
-from zvecsearch.scanner import ScannedFile, scan_paths
+from zvecsearch.scanner import scan_paths
 
 
 @pytest.fixture

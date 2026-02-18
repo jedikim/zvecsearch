@@ -1,4 +1,3 @@
-import pytest
 from zvecsearch.chunker import Chunk, chunk_markdown, compute_chunk_id
 
 

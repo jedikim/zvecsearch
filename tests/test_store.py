@@ -9,7 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 # ---------------------------------------------------------------------------
 # Build a comprehensive mock of the zvec module so that store.py can import

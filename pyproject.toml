@@ -9,7 +9,7 @@ description = "Semantic memory search powered by zvec vector database"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = [
-    "zvec>=0.1.0",
+    "zvec>=0.2.0",
     "click>=8.1",
     "watchdog>=4.0",
     "tomli_w>=1.0",

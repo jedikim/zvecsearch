@@ -37,9 +37,12 @@ pip install sentence-transformers
 
 - Python 3.10+
 - zvec >= 0.2.0
-- **Default local**: `sentence-transformers` (no API key, fully offline)
-- **OpenAI**: `OPENAI_API_KEY`
-- **Gemini**: `GOOGLE_API_KEY` + `pip install -e ".[google]"`
+- `sentence-transformers` — for the default local embedding (no API key, fully offline)
+
+**Optional** — only needed if you want to use a cloud embedding provider:
+
+- **OpenAI**: `OPENAI_API_KEY` environment variable
+- **Gemini**: `GOOGLE_API_KEY` environment variable + `pip install -e ".[google]"`
 
 ### zvec x86_64 Build Issue
 

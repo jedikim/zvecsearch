@@ -37,9 +37,12 @@ pip install sentence-transformers
 
 - Python 3.10+
 - zvec >= 0.2.0
-- **Default 로컬**: `sentence-transformers` (API 키 불필요, 완전 오프라인)
-- **OpenAI**: `OPENAI_API_KEY`
-- **Gemini**: `GOOGLE_API_KEY` + `pip install -e ".[google]"`
+- `sentence-transformers` — 기본 로컬 임베딩용 (API 키 불필요, 완전 오프라인)
+
+**선택사항** — 클라우드 임베딩 프로바이더를 사용할 경우에만 필요:
+
+- **OpenAI**: `OPENAI_API_KEY` 환경변수
+- **Gemini**: `GOOGLE_API_KEY` 환경변수 + `pip install -e ".[google]"`
 
 ### zvec x86_64 빌드 이슈
 

@@ -280,15 +280,15 @@ model = "text-embedding-3-small"
 
 ## Level 2: 임베딩 시스템
 
-5개 임베딩 제공자 지원.
+2개 임베딩 제공자 지원 (OpenAI, Gemini).
 
 ### Level 3: OpenAI
 
 기본 제공자, `text-embedding-3-small` 모델.
 
-### Level 3: 로컬 모델
+### Level 3: Gemini
 
-`sentence-transformers` 기반, 오프라인 사용 가능.
+Google Gemini 임베딩, `gemini-embedding-001` 모델 (768차원).
 
 # Level 1: 배포 가이드
 
@@ -296,7 +296,7 @@ model = "text-embedding-3-small"
 
 ```bash
 pip install zvecsearch
-pip install "zvecsearch[all]"  # 모든 의존성
+pip install "zvecsearch[google]"  # Gemini 임베딩
 ```
 
 ## Level 2: 업그레이드
@@ -410,11 +410,11 @@ class TestChunkerStress:
     def test_chunk_id_varies_with_model(self):
         """같은 청크라도 모델이 다르면 chunk_id가 달라야 함."""
         ids_per_model = {}
-        for model in ["openai", "google", "voyage", "ollama", "local"]:
+        for model in ["openai", "google"]:
             chunk_id = compute_chunk_id("test.md", 1, 10, "abc123", model)
             ids_per_model[model] = chunk_id
         # 모든 모델의 ID가 서로 달라야 함
-        assert len(set(ids_per_model.values())) == 5
+        assert len(set(ids_per_model.values())) == 2
 
     def test_overlap_produces_shared_content(self):
         """오버랩 설정이 실제로 겹치는 콘텐츠를 생성하는지 검증."""
@@ -543,7 +543,7 @@ class TestConfigStress:
         cfg = resolve_config({
             "zvec": {"path": "/custom/path", "collection": "custom_col", "hnsw_ef": 500},
             "search": {"query_ef": 500, "reranker": "weighted"},
-            "embedding": {"provider": "ollama", "model": "custom-model"},
+            "embedding": {"provider": "google", "model": "gemini-embedding-001"},
             "chunking": {"max_chunk_size": 3000, "overlap_lines": 5},
             "watch": {"debounce_ms": 3000},
         })
@@ -552,8 +552,8 @@ class TestConfigStress:
         assert cfg.zvec.hnsw_ef == 500
         assert cfg.search.query_ef == 500
         assert cfg.search.reranker == "weighted"
-        assert cfg.embedding.provider == "ollama"
-        assert cfg.embedding.model == "custom-model"
+        assert cfg.embedding.provider == "google"
+        assert cfg.embedding.model == "gemini-embedding-001"
         assert cfg.chunking.max_chunk_size == 3000
         assert cfg.watch.debounce_ms == 3000
 

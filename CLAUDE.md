@@ -5,7 +5,7 @@ Semantic memory search system powered by zvec (Alibaba's embedded vector databas
 ## Architecture
 
 - `src/zvecsearch/` - main package
-  - `core.py` - ZvecSearch orchestrator (async index/search/compact/watch)
+  - `core.py` - ZvecSearch orchestrator (sync index/search/watch, async compact)
   - `store.py` - ZvecStore wrapping zvec Collection API
   - `chunker.py` - markdown chunking with heading-based splitting
   - `scanner.py` - file discovery for .md/.markdown files
@@ -13,7 +13,7 @@ Semantic memory search system powered by zvec (Alibaba's embedded vector databas
   - `config.py` - TOML config with layered resolution
   - `compact.py` - LLM-based chunk summarization
   - `cli.py` - Click CLI interface
-  - `embeddings/` - 5 embedding providers (openai, google, voyage, ollama, local)
+  - `store.py` includes GeminiDenseEmbedding (OpenAI is zvec-native)
 - `tests/` - pytest test suite (TDD)
 
 ## Key Commands

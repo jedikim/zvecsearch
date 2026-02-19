@@ -205,12 +205,9 @@ class ZvecSearch:
 
 ## 임베딩 시스템 (Embedding System)
 
-5개의 embedding provider를 지원합니다:
+2개의 embedding provider를 지원합니다:
 - **OpenAI**: `text-embedding-3-small` (기본값, 1536차원)
-- **Google**: `text-embedding-004` (768차원)
-- **Voyage AI**: `voyage-3-lite` (1024차원)
-- **Ollama**: 로컬 모델 지원 (가변 차원)
-- **Local**: `sentence-transformers` 기반 (384차원)
+- **Gemini**: `gemini-embedding-001` (768차원)
 
 ### 하이브리드 검색 (Hybrid Search)
 

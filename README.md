@@ -222,8 +222,8 @@ zvecsearch defaults to zvec's local providers (`DefaultLocalDenseEmbedding` + `D
 
 | Provider | Class | Description |
 |----------|-------|-------------|
-| BM25 (zvecsearch default) | `BM25EmbeddingFunction` | Keyword-based, local, no model download |
-| SPLADE (zvec default) | `DefaultLocalSparseEmbedding` | Learned sparse, local, ~100MB model |
+| SPLADE (default provider) | `DefaultLocalSparseEmbedding` | Learned sparse, local, ~100MB model |
+| BM25 (openai/google provider) | `BM25EmbeddingFunction` | Keyword-based, local, no model download |
 
 ### Rerankers
 

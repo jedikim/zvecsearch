@@ -124,7 +124,7 @@ class ZvecStore:
 
         # Dense embedding: provider별 선택
         if embedding_provider == "google":
-            self._dense_emb = GeminiDenseEmbedding(model=embedding_model)
+            self._dense_emb = GeminiDenseEmbedding(model=embedding_model or "gemini-embedding-001")
         elif embedding_provider == "openai":
             self._dense_emb = zvec.OpenAIDenseEmbedding(
                 model=embedding_model or "text-embedding-3-small",

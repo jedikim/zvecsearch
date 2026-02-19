@@ -216,14 +216,14 @@ zvec의 기본 설정은 **API 키 없이** **네트워크 없이** 동작하는
 | OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원. zvecsearch는 zvec의 로컬 프로바이더(`DefaultLocalDenseEmbedding` + `DefaultLocalSparseEmbedding` + `DefaultLocalReRanker`)를 기본값으로 사용한다 — API 키 없이 바로 동작한다. OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원.
+zvecsearch는 zvec의 로컬 프로바이더(`DefaultLocalDenseEmbedding` + `DefaultLocalSparseEmbedding` + `DefaultLocalReRanker`)를 기본값으로 사용한다 — API 키 없이 바로 동작한다. OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원.
 
 ### Sparse 임베딩
 
 | 프로바이더 | 클래스 | 설명 |
 |-----------|-------|------|
-| BM25 (zvecsearch 기본) | `BM25EmbeddingFunction` | 키워드 기반, 로컬, 모델 다운로드 불필요 |
-| SPLADE (zvec 기본) | `DefaultLocalSparseEmbedding` | 학습된 희소 임베딩, 로컬, ~100MB |
+| SPLADE (default 프로바이더) | `DefaultLocalSparseEmbedding` | 학습된 희소 임베딩, 로컬, ~100MB |
+| BM25 (openai/google 프로바이더) | `BM25EmbeddingFunction` | 키워드 기반, 로컬, 모델 다운로드 불필요 |
 
 ### 리랭커
 

@@ -10,6 +10,17 @@ Index markdown files, embed them with OpenAI, Gemini, or local models, and perfo
 
 **[한국어 README](README.ko.md)**
 
+## Why Markdown?
+
+ZvecSearch treats **markdown files as the single source of truth** for knowledge. Markdown is:
+
+- **Human-readable and editable** — no proprietary format, no lock-in
+- **Git-friendly** — version control, diff, and collaboration out of the box
+- **Structurally meaningful** — headings (`#`, `##`, `###`) provide natural semantic boundaries for chunking
+- **The native format of AI workflows** — Claude, ChatGPT, and most LLM tools already read and write markdown
+
+Instead of importing data into a separate database, ZvecSearch indexes your existing markdown files in place. Your documents stay where they are — ZvecSearch just makes them searchable.
+
 ## Installation
 
 ```bash

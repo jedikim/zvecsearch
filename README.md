@@ -58,7 +58,7 @@ results = zs.search("HNSW algorithm", top_k=5)  # semantic search
 zvecsearch index ./docs/           # index markdown files
 zvecsearch search "HNSW algorithm" # semantic search
 zvecsearch watch ./docs/           # watch for changes, auto-reindex
-zvecsearch compact                 # LLM-based chunk summarization
+zvecsearch compact --source ./docs/ # LLM-based chunk summarization
 ```
 
 ## Usage
@@ -132,7 +132,6 @@ zvecsearch watch ./docs/
 zvecsearch watch ./docs/ --debounce-ms 3000
 
 # LLM summarization
-zvecsearch compact
 zvecsearch compact --source ./docs/file.md
 
 # Configuration
@@ -180,21 +179,39 @@ debounce_ms = 1500
 
 ## Architecture
 
+### Overall Pipeline
+
+```mermaid
+flowchart LR
+    A[Markdown Files] --> B[Scanner]
+    B --> C[Chunker]
+    C --> D[ZvecStore]
+    D --> E[(zvec DB)]
+    F[Query] --> G[Hybrid Search]
+    E --> G
+    G --> H[ReRanker]
+    H --> I[Results]
+```
+
 ### Hybrid Search
 
-```
-Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
-         +-- Sparse embedding (BM25)         -> Inverted index      --+
-                                                                      |
-                                                               RRF ReRanker -> Results
+```mermaid
+flowchart LR
+    Q[Query] --> D[Dense Embedding]
+    Q --> S[Sparse Embedding]
+    D --> HNSW[HNSW Cosine Search]
+    S --> INV[Inverted Index]
+    HNSW --> R[ReRanker]
+    INV --> R
+    R --> OUT[Ranked Results]
 ```
 
 Every query runs **two parallel searches**:
 
-1. **Dense search**: Query text is embedded (OpenAI or Gemini), then searched against HNSW index using cosine similarity.
-2. **Sparse search**: BM25 keyword matching via zvec's native `BM25EmbeddingFunction`.
+1. **Dense search**: Query text is embedded via the configured provider (local all-MiniLM-L6-v2 by default), then searched against HNSW index using cosine similarity.
+2. **Sparse search**: Sparse embedding via SPLADE (default) or BM25 (OpenAI/Gemini providers).
 
-Results are fused by **RRF ReRanker** (default) or **Weighted ReRanker**, producing a single ranked list.
+Results are fused by **DefaultLocalReRanker** (cross-encoder, default), **RRF ReRanker**, or **Weighted ReRanker**, producing a single ranked list.
 
 ### zvec Default Local Providers
 

@@ -58,7 +58,7 @@ results = zs.search("HNSW 알고리즘이란?", top_k=5)  # 시맨틱 검색
 zvecsearch index ./docs/           # 마크다운 파일 인덱싱
 zvecsearch search "HNSW 알고리즘"   # 시맨틱 검색
 zvecsearch watch ./docs/           # 파일 변경 감시, 자동 재인덱싱
-zvecsearch compact                 # LLM 기반 청크 요약
+zvecsearch compact --source ./docs/ # LLM 기반 청크 요약
 ```
 
 ## 사용법
@@ -132,7 +132,6 @@ zvecsearch watch ./docs/
 zvecsearch watch ./docs/ --debounce-ms 3000
 
 # LLM 요약
-zvecsearch compact
 zvecsearch compact --source ./docs/file.md
 
 # 설정
@@ -180,21 +179,39 @@ debounce_ms = 1500
 
 ## 아키텍처
 
+### 전체 파이프라인
+
+```mermaid
+flowchart LR
+    A[마크다운 파일] --> B[Scanner]
+    B --> C[Chunker]
+    C --> D[ZvecStore]
+    D --> E[(zvec DB)]
+    F[쿼리] --> G[하이브리드 검색]
+    E --> G
+    G --> H[ReRanker]
+    H --> I[결과]
+```
+
 ### 하이브리드 검색
 
-```
-Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
-         +-- Sparse embedding (BM25)         -> Inverted index      --+
-                                                                      |
-                                                               RRF ReRanker -> Results
+```mermaid
+flowchart LR
+    Q[쿼리] --> D[Dense 임베딩]
+    Q --> S[Sparse 임베딩]
+    D --> HNSW[HNSW 코사인 검색]
+    S --> INV[역인덱스]
+    HNSW --> R[ReRanker]
+    INV --> R
+    R --> OUT[최종 결과]
 ```
 
 모든 쿼리는 **두 가지 검색을 동시에** 수행:
 
-1. **Dense 검색**: 쿼리를 임베딩(OpenAI 또는 Gemini)하여 HNSW 인덱스에서 코사인 유사도 검색.
-2. **Sparse 검색**: zvec 네이티브 `BM25EmbeddingFunction`으로 키워드 매칭.
+1. **Dense 검색**: 설정된 프로바이더로 쿼리를 임베딩(기본: 로컬 all-MiniLM-L6-v2)하여 HNSW 인덱스에서 코사인 유사도 검색.
+2. **Sparse 검색**: SPLADE(기본) 또는 BM25(OpenAI/Gemini 프로바이더)로 희소 임베딩 매칭.
 
-결과는 **RRF ReRanker** (기본) 또는 **Weighted ReRanker**가 합쳐서 최종 순위를 매긴다.
+결과는 **DefaultLocalReRanker** (cross-encoder, 기본), **RRF ReRanker**, 또는 **Weighted ReRanker**가 합쳐서 최종 순위를 매긴다.
 
 ### zvec 기본 로컬 프로바이더
 

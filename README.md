@@ -88,7 +88,7 @@ zs = ZvecSearch(
     embedding_provider="openai",        # "default" (local), "openai", or "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
-    reranker="rrf",                     # "rrf" or "weighted"
+    reranker="rrf",                     # "default" (local cross-encoder), "rrf", or "weighted"
 )
 
 # Index all markdown files (incremental - only changed chunks are re-embedded)
@@ -177,7 +177,6 @@ provider = "default"               # "default" (local), "openai", or "google"
 model = ""                         # auto; or "text-embedding-3-small", "gemini-embedding-001"
 
 [search]
-top_k = 10
 query_ef = 300                     # HNSW search-time ef
 reranker = "default"               # "default" (local cross-encoder), "rrf", or "weighted"
 dense_weight = 1.0                 # for weighted reranker
@@ -313,7 +312,7 @@ zvecsearch/
 ## Testing
 
 ```bash
-# Unit tests (283 tests)
+# Unit tests (286 tests)
 pytest tests/ -v
 
 # Benchmarks (62 tests, no API key needed for Phase 1-4)

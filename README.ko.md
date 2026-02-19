@@ -88,7 +88,7 @@ zs = ZvecSearch(
     embedding_provider="openai",        # "default" (로컬), "openai", 또는 "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
-    reranker="rrf",                     # "rrf" 또는 "weighted"
+    reranker="rrf",                     # "default" (로컬 cross-encoder), "rrf", 또는 "weighted"
 )
 
 # 마크다운 파일 인덱싱 (증분 — 변경된 청크만 재임베딩)
@@ -177,7 +177,6 @@ provider = "default"               # "default" (로컬), "openai", 또는 "googl
 model = ""                         # 자동; 또는 "text-embedding-3-small", "gemini-embedding-001"
 
 [search]
-top_k = 10
 query_ef = 300                     # HNSW 검색 시 ef
 reranker = "default"               # "default" (로컬 cross-encoder), "rrf", 또는 "weighted"
 dense_weight = 1.0                 # weighted reranker용
@@ -313,7 +312,7 @@ zvecsearch/
 ## 테스트
 
 ```bash
-# 단위 테스트 (283개)
+# 단위 테스트 (286개)
 pytest tests/ -v
 
 # 벤치마크 (62개, Phase 1-4는 API 키 불필요)

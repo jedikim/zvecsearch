@@ -1,5 +1,7 @@
 # ZvecSearch
 
+**v0.1.0**
+
 [zvec](https://github.com/alibaba/zvec) (Alibaba 임베디드 벡터 데이터베이스) 기반 시맨틱 메모리 검색 시스템.
 
 마크다운 문서를 청킹하고 임베딩(OpenAI, Gemini, 또는 로컬 모델)하여 하이브리드 검색(dense + sparse)을 수행한다. 서버 불필요.
@@ -316,6 +318,20 @@ ruff check src/ tests/ benchmarks/
 | Phase 5 | Keyword Recall@5 | 0.9333 |
 
 시맨틱 쿼리(동의어, 패러프레이즈, 영한 혼합)에서 임베딩 검색이 키워드 검색 대비 확실한 우위를 보인다.
+
+## 변경 이력
+
+### v0.1.0
+
+- 헤딩 기반 마크다운 청킹
+- 하이브리드 검색 (dense + sparse) + RRF/Weighted/Cross-encoder 리랭킹
+- 3개 임베딩 프로바이더: zvec Default (로컬), OpenAI, Gemini
+- SHA-256 해시 기반 증분 인덱싱
+- 디바운스 파일 와처 (inotify 기반)
+- LLM 기반 청크 요약 (compact)
+- Click CLI: index/search/watch/compact/config 명령어
+- TOML 설정: 글로벌/프로젝트/CLI 레이어 해석
+- 286개 단위 테스트 + 62개 벤치마크
 
 ## 라이선스
 

@@ -791,3 +791,160 @@ class TestStoreGeminiProvider:
 
             # OpenAIDenseEmbedding은 호출되지 않아야 함
             zvec_mod.OpenAIDenseEmbedding.assert_not_called()
+
+
+class TestStoreDefaultProvider:
+    """ZvecStore에서 provider='default' 선택 시 DefaultLocalDenseEmbedding 사용 확인."""
+
+    def test_default_provider_uses_local_embedding(self):
+        """embedding_provider='default'일 때 DefaultLocalDenseEmbedding 사용."""
+        import zvecsearch.store as store_module
+        store_module._zvec_initialized = False
+
+        mock_collection = _make_mock_collection()
+        mock_default_emb = MagicMock()
+        mock_default_emb.embed.side_effect = lambda text: [0.1] * 384
+        mock_default_emb.dimension = 384
+
+        with patch("zvecsearch.store.zvec") as zvec_mod:
+            zvec_mod.DataType = _zvec_stub.DataType
+            zvec_mod.MetricType = _zvec_stub.MetricType
+            zvec_mod.LogLevel = _zvec_stub.LogLevel
+            zvec_mod.FieldSchema = MagicMock
+            zvec_mod.VectorSchema = MagicMock
+            zvec_mod.CollectionSchema = MagicMock
+            zvec_mod.CollectionOption = MagicMock
+            zvec_mod.HnswIndexParam = MagicMock
+            zvec_mod.InvertIndexParam = MagicMock
+            zvec_mod.VectorQuery = MagicMock
+            zvec_mod.RrfReRanker = MagicMock()
+            zvec_mod.WeightedReRanker = MagicMock()
+            zvec_mod.HnswQueryParam = MagicMock()
+            zvec_mod.Doc = FakeDoc
+            zvec_mod.DefaultLocalDenseEmbedding = MagicMock(return_value=mock_default_emb)
+
+            bm25_doc = MagicMock()
+            bm25_doc.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            bm25_query = MagicMock()
+            bm25_query.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            _bm25_iter = iter([bm25_doc, bm25_query])
+            zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_iter))
+
+            zvec_mod.create_and_open.return_value = mock_collection
+            zvec_mod.open.return_value = mock_collection
+            zvec_mod.init.return_value = None
+
+            s = ZvecStore(
+                path=str(TEST_DB),
+                collection="test_default",
+                embedding_provider="default",
+            )
+
+            # DefaultLocalDenseEmbedding이 호출되어야 함
+            zvec_mod.DefaultLocalDenseEmbedding.assert_called_once()
+            assert s._dense_emb is mock_default_emb
+
+            # OpenAIDenseEmbedding과 GeminiDenseEmbedding은 호출되지 않아야 함
+            zvec_mod.OpenAIDenseEmbedding.assert_not_called()
+
+    def test_default_provider_embed_and_upsert(self):
+        """embedding_provider='default'로 embed_and_upsert 동작 확인."""
+        import zvecsearch.store as store_module
+        store_module._zvec_initialized = False
+
+        mock_collection = _make_mock_collection()
+        mock_default_emb = MagicMock()
+        mock_default_emb.embed.side_effect = lambda text: [0.1] * 384
+        mock_default_emb.dimension = 384
+
+        with patch("zvecsearch.store.zvec") as zvec_mod:
+            zvec_mod.DataType = _zvec_stub.DataType
+            zvec_mod.MetricType = _zvec_stub.MetricType
+            zvec_mod.LogLevel = _zvec_stub.LogLevel
+            zvec_mod.FieldSchema = MagicMock
+            zvec_mod.VectorSchema = MagicMock
+            zvec_mod.CollectionSchema = MagicMock
+            zvec_mod.CollectionOption = MagicMock
+            zvec_mod.HnswIndexParam = MagicMock
+            zvec_mod.InvertIndexParam = MagicMock
+            zvec_mod.VectorQuery = MagicMock
+            zvec_mod.RrfReRanker = MagicMock()
+            zvec_mod.WeightedReRanker = MagicMock()
+            zvec_mod.HnswQueryParam = MagicMock()
+            zvec_mod.Doc = FakeDoc
+            zvec_mod.DefaultLocalDenseEmbedding = MagicMock(return_value=mock_default_emb)
+
+            bm25_doc = MagicMock()
+            bm25_doc.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            bm25_query = MagicMock()
+            bm25_query.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            _bm25_iter = iter([bm25_doc, bm25_query])
+            zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_iter))
+
+            zvec_mod.create_and_open.return_value = mock_collection
+            zvec_mod.open.return_value = mock_collection
+            zvec_mod.init.return_value = None
+
+            s = ZvecStore(
+                path=str(TEST_DB),
+                collection="test_default_upsert",
+                embedding_provider="default",
+            )
+
+            chunks = _sample_chunks(3)
+            count = s.embed_and_upsert(chunks)
+            assert count == 3
+            assert mock_default_emb.embed.call_count == 3
+
+    def test_default_provider_search(self):
+        """embedding_provider='default'로 search 동작 확인."""
+        import zvecsearch.store as store_module
+        store_module._zvec_initialized = False
+
+        mock_collection = _make_mock_collection()
+        mock_default_emb = MagicMock()
+        mock_default_emb.embed.side_effect = lambda text: [0.1] * 384
+        mock_default_emb.dimension = 384
+
+        with patch("zvecsearch.store.zvec") as zvec_mod:
+            zvec_mod.DataType = _zvec_stub.DataType
+            zvec_mod.MetricType = _zvec_stub.MetricType
+            zvec_mod.LogLevel = _zvec_stub.LogLevel
+            zvec_mod.FieldSchema = MagicMock
+            zvec_mod.VectorSchema = MagicMock
+            zvec_mod.CollectionSchema = MagicMock
+            zvec_mod.CollectionOption = MagicMock
+            zvec_mod.HnswIndexParam = MagicMock
+            zvec_mod.InvertIndexParam = MagicMock
+            zvec_mod.VectorQuery = MagicMock
+            zvec_mod.RrfReRanker = MagicMock()
+            zvec_mod.WeightedReRanker = MagicMock()
+            zvec_mod.HnswQueryParam = MagicMock()
+            zvec_mod.Doc = FakeDoc
+            zvec_mod.DefaultLocalDenseEmbedding = MagicMock(return_value=mock_default_emb)
+
+            bm25_doc = MagicMock()
+            bm25_doc.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            bm25_query = MagicMock()
+            bm25_query.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+            _bm25_iter = iter([bm25_doc, bm25_query])
+            zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_iter))
+
+            zvec_mod.create_and_open.return_value = mock_collection
+            zvec_mod.open.return_value = mock_collection
+            zvec_mod.init.return_value = None
+
+            s = ZvecStore(
+                path=str(TEST_DB),
+                collection="test_default_search",
+                embedding_provider="default",
+            )
+
+            # Insert docs first
+            s.embed_and_upsert(_sample_chunks(3))
+            mock_default_emb.embed.reset_mock()
+
+            # Search
+            results = s.search("test query")
+            mock_default_emb.embed.assert_called_once_with("test query")
+            assert len(results) > 0

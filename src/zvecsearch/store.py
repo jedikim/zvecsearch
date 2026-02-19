@@ -123,7 +123,9 @@ class ZvecStore:
         self._collection = None
 
         # Dense embedding: provider별 선택
-        if embedding_provider == "google":
+        if embedding_provider == "default":
+            self._dense_emb = zvec.DefaultLocalDenseEmbedding()
+        elif embedding_provider == "google":
             self._dense_emb = GeminiDenseEmbedding(model=embedding_model)
         else:
             self._dense_emb = zvec.OpenAIDenseEmbedding(model=embedding_model)

@@ -2,7 +2,7 @@
 
 [zvec](https://github.com/alibaba/zvec) (Alibaba 임베디드 벡터 데이터베이스) 기반 시맨틱 메모리 검색 시스템.
 
-마크다운 문서를 청킹하고 임베딩하여 하이브리드 검색(dense + sparse)을 수행한다. 서버 불필요.
+마크다운 문서를 청킹하고 임베딩(OpenAI, Gemini, 또는 로컬 모델)하여 하이브리드 검색(dense + sparse)을 수행한다. 서버 불필요.
 
 > Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
 
@@ -15,13 +15,18 @@ pip install -e ".[dev]"
 
 # Gemini 임베딩 사용 시
 pip install -e ".[google]"
+
+# zvec 기본 로컬 임베딩 사용 시 (API 키 불필요)
+pip install sentence-transformers
 ```
 
 ### 요구사항
 
 - Python 3.10+
 - zvec >= 0.2.0
-- `OPENAI_API_KEY` (기본 임베딩) 또는 `GOOGLE_API_KEY` (Gemini 임베딩)
+- **Default 로컬**: `sentence-transformers` (API 키 불필요, 완전 오프라인)
+- **OpenAI**: `OPENAI_API_KEY`
+- **Gemini**: `GOOGLE_API_KEY` + `pip install -e ".[google]"`
 
 ### zvec x86_64 빌드 이슈
 
@@ -64,7 +69,7 @@ from zvecsearch import ZvecSearch
 # 커스텀 설정으로 초기화
 zs = ZvecSearch(
     paths=["./docs", "./notes"],
-    embedding_provider="openai",        # "openai" 또는 "google"
+    embedding_provider="openai",        # "default", "openai", 또는 "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
     reranker="rrf",                     # "rrf" 또는 "weighted"
@@ -114,6 +119,7 @@ with ZvecSearch(paths=["./docs"]) as zs:
 zvecsearch index ./docs/
 zvecsearch index ./docs/ ./notes/ --force    # 전체 재인덱싱
 zvecsearch index ./docs/ --provider google   # Gemini 임베딩 사용
+zvecsearch index ./docs/ --provider default  # 로컬 임베딩 (API 키 불필요)
 
 # 시맨틱 검색
 zvecsearch search "HNSW 동작 원리"
@@ -152,7 +158,7 @@ hnsw_ef = 300                      # HNSW ef_construction
 quantize_type = "int8"             # "int8", "int4", "fp16", "none"
 
 [embedding]
-provider = "openai"                # "openai" 또는 "google"
+provider = "openai"                # "default", "openai", 또는 "google"
 model = "text-embedding-3-small"   # 또는 "gemini-embedding-001"
 
 [search]
@@ -188,14 +194,34 @@ Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
 
 결과는 **RRF ReRanker** (기본) 또는 **Weighted ReRanker**가 합쳐서 최종 순위를 매긴다.
 
+### zvec 기본 로컬 프로바이더
+
+zvec의 기본 설정은 **API 키 없이** **네트워크 없이** 동작하는 로컬 모델 조합을 사용한다:
+
+| 컴포넌트 | 클래스 | 모델 | 크기 |
+|---------|-------|------|------|
+| Dense 임베딩 | `DefaultLocalDenseEmbedding` | all-MiniLM-L6-v2 (384차원) | ~80MB |
+| Sparse 임베딩 | `DefaultLocalSparseEmbedding` | SPLADE | ~100MB |
+| 리랭커 | `DefaultLocalReRanker` | cross-encoder/ms-marco-MiniLM-L6-v2 | ~80MB |
+
+이 `Default*` 클래스들은 zvec에 내장되어 있으며, 첫 사용 시 모델이 자동 다운로드된다.
+
 ### 임베딩 프로바이더
 
 | 프로바이더 | 모델 | 차원 | 환경변수 |
 |-----------|------|------|---------|
-| OpenAI (기본) | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
+| zvec Default (로컬) | all-MiniLM-L6-v2 | 384 | 없음 (로컬) |
+| OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원.
+OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원. zvecsearch는 현재 OpenAI를 기본값으로 사용하지만, zvec 자체의 기본값은 `DefaultLocalDenseEmbedding` (API 불필요)이다.
+
+### Sparse 임베딩
+
+| 프로바이더 | 클래스 | 설명 |
+|-----------|-------|------|
+| BM25 (zvecsearch 기본) | `BM25EmbeddingFunction` | 키워드 기반, 로컬, 모델 다운로드 불필요 |
+| SPLADE (zvec 기본) | `DefaultLocalSparseEmbedding` | 학습된 희소 임베딩, 로컬, ~100MB |
 
 ### 리랭커
 
@@ -203,8 +229,8 @@ OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `De
 |-------|------|------|
 | **RRF** (기본) | 순위 합산 | 순위 위치 기반 합산. 튜닝 불필요. |
 | **Weighted** | 점수 합산 | dense/sparse 점수의 가중 합산. 비율 조절 가능. |
-
-zvec는 cross-encoder 리랭커(`QwenReRanker`, `DefaultLocalReRanker`)도 지원하지만, 아직 zvecsearch에는 연결하지 않았다.
+| **DefaultLocalReRanker** | Cross-encoder | ms-marco-MiniLM-L6-v2, 높은 정확도, 느림. 로컬, ~80MB. |
+| **QwenReRanker** | Cross-encoder | Qwen 기반 리랭커, 중국어/다국어 지원. |
 
 ### 스토리지
 
@@ -244,7 +270,7 @@ zvecsearch/
 │   ├── compact.py     # LLM 기반 청크 요약 (비동기)
 │   ├── cli.py         # Click CLI 인터페이스
 │   └── transcript.py  # 트랜스크립트 유틸리티
-├── tests/             # pytest 단위 테스트 (283개)
+├── tests/             # pytest 단위 테스트 (286개)
 ├── benchmarks/        # 5-Phase 벤치마크 (62개)
 ├── scripts/           # 실제 API 임베딩 테스트 스크립트
 ├── dist/              # 빌드된 zvec 휠 (x86-64-v2)
@@ -266,6 +292,9 @@ OPENAI_API_KEY=... GOOGLE_API_KEY=... pytest benchmarks/test_phase5_embeddings.p
 # 실제 API 임베딩 스크립트
 OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_gemini_embedding.py
 OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_zvecsearch_gemini.py
+
+# 기본 로컬 임베딩 테스트 (API 키 불필요)
+python scripts/test_default_local.py
 
 # 린트
 ruff check src/ tests/ benchmarks/

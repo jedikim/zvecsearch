@@ -2,7 +2,7 @@
 
 Semantic memory search powered by [zvec](https://github.com/alibaba/zvec) (Alibaba's embedded vector database).
 
-Index markdown files, embed them with OpenAI or Gemini, and perform hybrid search (dense + sparse) with no server required.
+Index markdown files, embed them with OpenAI, Gemini, or local models, and perform hybrid search (dense + sparse) with no server required.
 
 > Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
 
@@ -15,13 +15,18 @@ pip install -e ".[dev]"
 
 # For Gemini embedding support
 pip install -e ".[google]"
+
+# For zvec default local embedding (no API key needed)
+pip install sentence-transformers
 ```
 
 ### Requirements
 
 - Python 3.10+
 - zvec >= 0.2.0
-- `OPENAI_API_KEY` (default embedding) or `GOOGLE_API_KEY` (Gemini embedding)
+- **Default local**: `sentence-transformers` (no API key, fully offline)
+- **OpenAI**: `OPENAI_API_KEY`
+- **Gemini**: `GOOGLE_API_KEY` + `pip install -e ".[google]"`
 
 ### zvec x86_64 Build Issue
 
@@ -64,7 +69,7 @@ from zvecsearch import ZvecSearch
 # Initialize with custom settings
 zs = ZvecSearch(
     paths=["./docs", "./notes"],
-    embedding_provider="openai",        # "openai" or "google"
+    embedding_provider="openai",        # "default", "openai", or "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
     reranker="rrf",                     # "rrf" or "weighted"
@@ -114,6 +119,7 @@ with ZvecSearch(paths=["./docs"]) as zs:
 zvecsearch index ./docs/
 zvecsearch index ./docs/ ./notes/ --force    # force full re-index
 zvecsearch index ./docs/ --provider google   # use Gemini embedding
+zvecsearch index ./docs/ --provider default  # use local embedding (no API key)
 
 # Semantic search
 zvecsearch search "how does HNSW work"
@@ -152,7 +158,7 @@ hnsw_ef = 300                      # HNSW ef_construction
 quantize_type = "int8"             # "int8", "int4", "fp16", "none"
 
 [embedding]
-provider = "openai"                # "openai" or "google"
+provider = "openai"                # "default", "openai", or "google"
 model = "text-embedding-3-small"   # or "gemini-embedding-001"
 
 [search]
@@ -188,14 +194,34 @@ Every query runs **two parallel searches**:
 
 Results are fused by **RRF ReRanker** (default) or **Weighted ReRanker**, producing a single ranked list.
 
+### zvec Default Local Providers
+
+zvec's built-in default configuration uses all-local models that require **no API keys** and **no network access**:
+
+| Component | Class | Model | Size |
+|-----------|-------|-------|------|
+| Dense embedding | `DefaultLocalDenseEmbedding` | all-MiniLM-L6-v2 (384 dim) | ~80MB |
+| Sparse embedding | `DefaultLocalSparseEmbedding` | SPLADE | ~100MB |
+| Reranker | `DefaultLocalReRanker` | cross-encoder/ms-marco-MiniLM-L6-v2 | ~80MB |
+
+These `Default*` classes are available in zvec out of the box. Models are downloaded automatically on first use.
+
 ### Embedding Providers
 
 | Provider | Model | Dimensions | Env Variable |
 |----------|-------|-----------|--------------|
-| OpenAI (default) | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
+| zvec Default (local) | all-MiniLM-L6-v2 | 384 | None (local) |
+| OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-OpenAI embedding is provided by zvec's native `OpenAIDenseEmbedding`. Gemini is implemented as a custom `GeminiDenseEmbedding` class that conforms to zvec's `DenseEmbeddingFunction` Protocol.
+OpenAI embedding is provided by zvec's native `OpenAIDenseEmbedding`. Gemini is implemented as a custom `GeminiDenseEmbedding` class that conforms to zvec's `DenseEmbeddingFunction` Protocol. zvecsearch currently defaults to OpenAI, but zvec itself defaults to `DefaultLocalDenseEmbedding` (no API required).
+
+### Sparse Embedding
+
+| Provider | Class | Description |
+|----------|-------|-------------|
+| BM25 (zvecsearch default) | `BM25EmbeddingFunction` | Keyword-based, local, no model download |
+| SPLADE (zvec default) | `DefaultLocalSparseEmbedding` | Learned sparse, local, ~100MB model |
 
 ### Rerankers
 
@@ -203,8 +229,8 @@ OpenAI embedding is provided by zvec's native `OpenAIDenseEmbedding`. Gemini is 
 |----------|--------|-------------|
 | **RRF** (default) | Rank fusion | Combines results by rank position. No tuning needed. |
 | **Weighted** | Score fusion | Weighted sum of dense/sparse scores. Configurable weights. |
-
-zvec also supports cross-encoder rerankers (`QwenReRanker`, `DefaultLocalReRanker`) for higher accuracy at the cost of speed, but these are not yet wired into zvecsearch.
+| **DefaultLocalReRanker** | Cross-encoder | ms-marco-MiniLM-L6-v2, higher accuracy, slower. Local, ~80MB. |
+| **QwenReRanker** | Cross-encoder | Qwen-based reranker for Chinese/multilingual. |
 
 ### Storage
 
@@ -244,7 +270,7 @@ zvecsearch/
 │   ├── compact.py     # LLM-based chunk summarization (async)
 │   ├── cli.py         # Click CLI interface
 │   └── transcript.py  # Transcript utilities
-├── tests/             # pytest unit tests (283)
+├── tests/             # pytest unit tests (286)
 ├── benchmarks/        # 5-phase benchmarks (62)
 ├── scripts/           # Real API embedding test scripts
 ├── dist/              # Pre-built zvec wheel (x86-64-v2)
@@ -266,6 +292,9 @@ OPENAI_API_KEY=... GOOGLE_API_KEY=... pytest benchmarks/test_phase5_embeddings.p
 # Real API embedding scripts
 OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_gemini_embedding.py
 OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_zvecsearch_gemini.py
+
+# Default local embedding test (no API key needed)
+python scripts/test_default_local.py
 
 # Lint
 ruff check src/ tests/ benchmarks/

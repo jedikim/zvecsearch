@@ -326,3 +326,5 @@ MIT
 ---
 
 > **Note:** This project was built for my personal agent development purposes and is still in a very early stage. Use with caution.
+
+> **Acknowledgements:** Thanks to [zvec](https://github.com/alibaba/zvec), [OpenClaw](https://github.com/openclaw/openclaw), and [memsearch](https://github.com/zilliztech/memsearch) for the inspiration and foundation that made this project possible.

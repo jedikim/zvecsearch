@@ -326,3 +326,5 @@ MIT
 ---
 
 > **주의:** 이 프로젝트는 개인 에이전트 개발 용도로 만든 것이며, 아직 매우 초기 상태입니다. 사용에 주의해 주세요.
+
+> **감사:** 이 프로젝트의 영감과 기반이 되어준 [zvec](https://github.com/alibaba/zvec), [OpenClaw](https://github.com/openclaw/openclaw), [memsearch](https://github.com/zilliztech/memsearch)에 감사드립니다.

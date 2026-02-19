@@ -260,9 +260,9 @@ zvecsearch defaults to zvec's local providers (`DefaultLocalDenseEmbedding` + `D
 
 | Reranker | Method | Description |
 |----------|--------|-------------|
-| **RRF** (default) | Rank fusion | Combines results by rank position. No tuning needed. |
+| **DefaultLocalReRanker** (default) | Cross-encoder | ms-marco-MiniLM-L6-v2, highest accuracy. Local, ~80MB. |
+| **RRF** | Rank fusion | Combines results by rank position. No tuning needed. |
 | **Weighted** | Score fusion | Weighted sum of dense/sparse scores. Configurable weights. |
-| **DefaultLocalReRanker** | Cross-encoder | ms-marco-MiniLM-L6-v2, higher accuracy, slower. Local, ~80MB. |
 | **QwenReRanker** | Cross-encoder | Qwen-based reranker for Chinese/multilingual. |
 
 ### Storage

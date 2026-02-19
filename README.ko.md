@@ -260,9 +260,9 @@ zvecsearch는 zvec의 로컬 프로바이더(`DefaultLocalDenseEmbedding` + `Def
 
 | 리랭커 | 방식 | 설명 |
 |-------|------|------|
-| **RRF** (기본) | 순위 합산 | 순위 위치 기반 합산. 튜닝 불필요. |
+| **DefaultLocalReRanker** (기본) | Cross-encoder | ms-marco-MiniLM-L6-v2, 가장 높은 정확도. 로컬, ~80MB. |
+| **RRF** | 순위 합산 | 순위 위치 기반 합산. 튜닝 불필요. |
 | **Weighted** | 점수 합산 | dense/sparse 점수의 가중 합산. 비율 조절 가능. |
-| **DefaultLocalReRanker** | Cross-encoder | ms-marco-MiniLM-L6-v2, 높은 정확도, 느림. 로컬, ~80MB. |
 | **QwenReRanker** | Cross-encoder | Qwen 기반 리랭커, 중국어/다국어 지원. |
 
 ### 스토리지

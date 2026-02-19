@@ -69,7 +69,7 @@ from zvecsearch import ZvecSearch
 # 커스텀 설정으로 초기화
 zs = ZvecSearch(
     paths=["./docs", "./notes"],
-    embedding_provider="openai",        # "default", "openai", 또는 "google"
+    embedding_provider="openai",        # "default" (로컬), "openai", 또는 "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
     reranker="rrf",                     # "rrf" 또는 "weighted"
@@ -158,13 +158,13 @@ hnsw_ef = 300                      # HNSW ef_construction
 quantize_type = "int8"             # "int8", "int4", "fp16", "none"
 
 [embedding]
-provider = "openai"                # "default", "openai", 또는 "google"
-model = "text-embedding-3-small"   # 또는 "gemini-embedding-001"
+provider = "default"               # "default" (로컬), "openai", 또는 "google"
+model = ""                         # 자동; 또는 "text-embedding-3-small", "gemini-embedding-001"
 
 [search]
 top_k = 10
 query_ef = 300                     # HNSW 검색 시 ef
-reranker = "rrf"                   # "rrf" 또는 "weighted"
+reranker = "default"               # "default" (로컬 cross-encoder), "rrf", 또는 "weighted"
 dense_weight = 1.0                 # weighted reranker용
 sparse_weight = 0.8                # weighted reranker용
 
@@ -214,7 +214,7 @@ zvec의 기본 설정은 **API 키 없이** **네트워크 없이** 동작하는
 | OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원. zvecsearch는 현재 OpenAI를 기본값으로 사용하지만, zvec 자체의 기본값은 `DefaultLocalDenseEmbedding` (API 불필요)이다.
+OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원. zvecsearch는 zvec의 로컬 프로바이더(`DefaultLocalDenseEmbedding` + `DefaultLocalSparseEmbedding` + `DefaultLocalReRanker`)를 기본값으로 사용한다 — API 키 없이 바로 동작한다. OpenAI는 zvec 네이티브 `OpenAIDenseEmbedding` 사용. Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 `GeminiDenseEmbedding` 클래스로 지원.
 
 ### Sparse 임베딩
 

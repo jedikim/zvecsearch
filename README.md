@@ -69,7 +69,7 @@ from zvecsearch import ZvecSearch
 # Initialize with custom settings
 zs = ZvecSearch(
     paths=["./docs", "./notes"],
-    embedding_provider="openai",        # "default", "openai", or "google"
+    embedding_provider="openai",        # "default" (local), "openai", or "google"
     embedding_model="text-embedding-3-small",
     quantize_type="int8",               # "int8", "int4", "fp16", "none"
     reranker="rrf",                     # "rrf" or "weighted"
@@ -158,13 +158,13 @@ hnsw_ef = 300                      # HNSW ef_construction
 quantize_type = "int8"             # "int8", "int4", "fp16", "none"
 
 [embedding]
-provider = "openai"                # "default", "openai", or "google"
-model = "text-embedding-3-small"   # or "gemini-embedding-001"
+provider = "default"               # "default" (local), "openai", or "google"
+model = ""                         # auto; or "text-embedding-3-small", "gemini-embedding-001"
 
 [search]
 top_k = 10
 query_ef = 300                     # HNSW search-time ef
-reranker = "rrf"                   # "rrf" or "weighted"
+reranker = "default"               # "default" (local cross-encoder), "rrf", or "weighted"
 dense_weight = 1.0                 # for weighted reranker
 sparse_weight = 0.8                # for weighted reranker
 
@@ -214,7 +214,7 @@ These `Default*` classes are available in zvec out of the box. Models are downlo
 | OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-OpenAI embedding is provided by zvec's native `OpenAIDenseEmbedding`. Gemini is implemented as a custom `GeminiDenseEmbedding` class that conforms to zvec's `DenseEmbeddingFunction` Protocol. zvecsearch currently defaults to OpenAI, but zvec itself defaults to `DefaultLocalDenseEmbedding` (no API required).
+zvecsearch defaults to zvec's local providers (`DefaultLocalDenseEmbedding` + `DefaultLocalSparseEmbedding` + `DefaultLocalReRanker`) — no API key needed out of the box. OpenAI uses zvec's native `OpenAIDenseEmbedding`. Gemini is implemented as a custom `GeminiDenseEmbedding` class conforming to zvec's `DenseEmbeddingFunction` Protocol.
 
 ### Sparse Embedding
 

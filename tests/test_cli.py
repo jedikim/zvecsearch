@@ -478,7 +478,7 @@ class TestCLIConfig:
     def test_config_get(self, runner):
         result = runner.invoke(cli, ["config", "get", "embedding.provider"])
         assert result.exit_code == 0
-        assert "openai" in result.output
+        assert "default" in result.output
 
     def test_config_set_and_get(self, runner, tmp_path, monkeypatch):
         cfg_file = tmp_path / "config.toml"

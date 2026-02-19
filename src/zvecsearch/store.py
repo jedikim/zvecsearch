@@ -97,15 +97,15 @@ class ZvecStore:
         self,
         path: str = "~/.zvecsearch/db",
         collection: str = "zvecsearch_chunks",
-        embedding_provider: str = "openai",
-        embedding_model: str = "text-embedding-3-small",
+        embedding_provider: str = "default",
+        embedding_model: str = "",
         enable_mmap: bool = True,
         read_only: bool = False,
         hnsw_m: int = 16,
         hnsw_ef: int = 300,
         quantize_type: str = "int8",
         query_ef: int = 300,
-        reranker: str = "rrf",
+        reranker: str = "default",
         dense_weight: float = 1.0,
         sparse_weight: float = 0.8,
     ):
@@ -123,15 +123,23 @@ class ZvecStore:
         self._collection = None
 
         # Dense embedding: provider별 선택
-        if embedding_provider == "default":
-            self._dense_emb = zvec.DefaultLocalDenseEmbedding()
-        elif embedding_provider == "google":
+        if embedding_provider == "google":
             self._dense_emb = GeminiDenseEmbedding(model=embedding_model)
+        elif embedding_provider == "openai":
+            self._dense_emb = zvec.OpenAIDenseEmbedding(
+                model=embedding_model or "text-embedding-3-small",
+            )
+        else:  # "default"
+            self._dense_emb = zvec.DefaultLocalDenseEmbedding()
+
+        # Sparse embedding: provider별 선택
+        if embedding_provider == "default":
+            self._sparse_emb = zvec.DefaultLocalSparseEmbedding()
+            self._bm25_doc = self._sparse_emb
+            self._bm25_query = self._sparse_emb
         else:
-            self._dense_emb = zvec.OpenAIDenseEmbedding(model=embedding_model)
-        # Sparse embedding: BM25 (zvec-native)
-        self._bm25_doc = zvec.BM25EmbeddingFunction(encoding_type="document")
-        self._bm25_query = zvec.BM25EmbeddingFunction(encoding_type="query")
+            self._bm25_doc = zvec.BM25EmbeddingFunction(encoding_type="document")
+            self._bm25_query = zvec.BM25EmbeddingFunction(encoding_type="query")
 
         self._init_zvec()
         self._ensure_collection()
@@ -261,7 +269,9 @@ class ZvecStore:
             reranker = zvec.WeightedReRanker(
                 topn=top_k, weights=[self._dense_weight, self._sparse_weight],
             )
-        else:
+        elif self._reranker_type == "default":
+            reranker = zvec.DefaultLocalReRanker(query=query_text, topn=top_k)
+        else:  # "rrf"
             reranker = zvec.RrfReRanker(topn=top_k, rank_constant=60)
         query_param = zvec.HnswQueryParam(ef=self._query_ef)
         results = self._collection.query(

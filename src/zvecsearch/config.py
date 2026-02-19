@@ -32,14 +32,14 @@ class ZvecConfig:
 
 @dataclass
 class EmbeddingConfig:
-    provider: str = "openai"
-    model: str = "text-embedding-3-small"
+    provider: str = "default"
+    model: str = ""
 
 
 @dataclass
 class SearchConfig:
     query_ef: int = 300
-    reranker: str = "rrf"
+    reranker: str = "default"
     dense_weight: float = 1.0
     sparse_weight: float = 0.8
 

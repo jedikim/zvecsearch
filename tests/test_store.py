@@ -222,19 +222,29 @@ def store():
         zvec_mod.HnswQueryParam = MagicMock()
         zvec_mod.Doc = FakeDoc
 
-        # Dense embedding mock
+        # Dense embedding mock (default = DefaultLocalDenseEmbedding)
         dense_emb_instance = MagicMock()
         dense_emb_instance.embed.side_effect = lambda text: [0.1, 0.2, 0.3, 0.4]
         dense_emb_instance.dim = 4
+        dense_emb_instance.dimension = 4
+        zvec_mod.DefaultLocalDenseEmbedding = MagicMock(return_value=dense_emb_instance)
         zvec_mod.OpenAIDenseEmbedding = MagicMock(return_value=dense_emb_instance)
 
-        # BM25 mock: returns sparse dict from text
+        # Sparse embedding mock (default = DefaultLocalSparseEmbedding)
+        sparse_emb_instance = MagicMock()
+        sparse_emb_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
+        zvec_mod.DefaultLocalSparseEmbedding = MagicMock(return_value=sparse_emb_instance)
+
+        # BM25 mock (for non-default providers)
         bm25_doc_instance = MagicMock()
         bm25_doc_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
         bm25_query_instance = MagicMock()
         bm25_query_instance.embed.side_effect = lambda text: {hash(text) % 10000: 1.0}
         _bm25_instances = iter([bm25_doc_instance, bm25_query_instance])
         zvec_mod.BM25EmbeddingFunction = MagicMock(side_effect=lambda **kw: next(_bm25_instances))
+
+        # Reranker mock (default = DefaultLocalReRanker)
+        zvec_mod.DefaultLocalReRanker = MagicMock()
 
         # create_and_open / open return our mock collection
         zvec_mod.create_and_open.return_value = mock_collection
@@ -274,7 +284,7 @@ class TestZvecStoreCreation:
 
     def test_dense_emb_initialized(self, store):
         s, _, zvec_mod = store
-        zvec_mod.OpenAIDenseEmbedding.assert_called_once_with(model="text-embedding-3-small")
+        zvec_mod.DefaultLocalDenseEmbedding.assert_called_once()
         assert s._dense_emb is not None
 
     def test_bm25_doc_initialized(self, store):
@@ -293,9 +303,9 @@ class TestZvecStoreCreation:
         _, _, zvec_mod = store
         zvec_mod.create_and_open.assert_called_once()
 
-    def test_default_reranker_is_rrf(self, store):
+    def test_default_reranker_is_default(self, store):
         s, _, _ = store
-        assert s._reranker_type == "rrf"
+        assert s._reranker_type == "default"
 
     def test_default_quantize_type(self, store):
         s, _, _ = store
@@ -437,11 +447,11 @@ class TestSearch:
         s.search("test query")
         s._bm25_query.embed.assert_called()
 
-    def test_uses_rrf_reranker_by_default(self, store):
+    def test_uses_default_local_reranker_by_default(self, store):
         s, _, zvec_mod = store
         s.embed_and_upsert(_sample_chunks(2))
         s.search("test query")
-        zvec_mod.RrfReRanker.assert_called()
+        zvec_mod.DefaultLocalReRanker.assert_called()
 
     def test_result_has_expected_keys(self, store):
         s, _, _ = store

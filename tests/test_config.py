@@ -19,14 +19,14 @@ def test_default_config():
 
 def test_embedding_config_defaults():
     cfg = ZvecSearchConfig()
-    assert cfg.embedding.provider == "openai"
-    assert cfg.embedding.model == "text-embedding-3-small"
+    assert cfg.embedding.provider == "default"
+    assert cfg.embedding.model == ""
 
 
 def test_search_config_defaults():
     cfg = ZvecSearchConfig()
     assert cfg.search.query_ef == 300
-    assert cfg.search.reranker == "rrf"
+    assert cfg.search.reranker == "default"
     assert cfg.search.dense_weight == 1.0
     assert cfg.search.sparse_weight == 0.8
 
@@ -62,8 +62,8 @@ def test_resolve_config_defaults(monkeypatch, tmp_path):
     cfg = resolve_config()
     assert cfg.zvec.path == "~/.zvecsearch/db"
     assert cfg.zvec.quantize_type == "int8"
-    assert cfg.embedding.model == "text-embedding-3-small"
-    assert cfg.search.reranker == "rrf"
+    assert cfg.embedding.model == ""
+    assert cfg.search.reranker == "default"
 
 
 def test_resolve_config_cli_overrides(monkeypatch, tmp_path):
@@ -83,7 +83,7 @@ def test_config_to_dict():
     assert d["zvec"]["path"] == "~/.zvecsearch/db"
     assert d["zvec"]["quantize_type"] == "int8"
     assert "search" in d
-    assert d["search"]["reranker"] == "rrf"
+    assert d["search"]["reranker"] == "default"
     assert d["search"]["dense_weight"] == 1.0
 
 
@@ -91,8 +91,8 @@ def test_get_config_value():
     cfg = ZvecSearchConfig()
     assert get_config_value("zvec.collection", cfg) == "zvecsearch_chunks"
     assert get_config_value("zvec.quantize_type", cfg) == "int8"
-    assert get_config_value("search.reranker", cfg) == "rrf"
-    assert get_config_value("embedding.model", cfg) == "text-embedding-3-small"
+    assert get_config_value("search.reranker", cfg) == "default"
+    assert get_config_value("embedding.model", cfg) == ""
 
 
 def test_save_and_load(tmp_path):

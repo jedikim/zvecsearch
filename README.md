@@ -6,8 +6,6 @@ Semantic memory search powered by [zvec](https://github.com/alibaba/zvec) (Aliba
 
 Index markdown files, embed them with OpenAI, Gemini, or local models, and perform hybrid search (dense + sparse) with no server required.
 
-> Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
-
 **[한국어 README](README.ko.md)**
 
 ## Why Markdown?

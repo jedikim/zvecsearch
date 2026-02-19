@@ -6,8 +6,6 @@
 
 마크다운 문서를 청킹하고 임베딩(OpenAI, Gemini, 또는 로컬 모델)하여 하이브리드 검색(dense + sparse)을 수행한다. 서버 불필요.
 
-> Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
-
 **[English README](README.md)**
 
 ## 왜 마크다운인가?

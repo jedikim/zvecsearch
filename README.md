@@ -322,3 +322,7 @@ Embedding-based search significantly outperforms keyword search on semantic quer
 ## License
 
 MIT
+
+---
+
+> **Note:** This project was built for my personal agent development purposes and is still in a very early stage. Use with caution.

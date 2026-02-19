@@ -28,6 +28,7 @@ def _run(coro):
 
 # -- CLI param name -> dotted config key mapping --
 _PARAM_MAP = {
+    "provider": "embedding.provider",
     "model": "embedding.model",
     "collection": "zvec.collection",
     "zvec_path": "zvec.path",
@@ -87,6 +88,7 @@ def _cfg_to_store_kwargs(cfg: ZvecSearchConfig) -> dict:
 
 def _common_options(f):
     """Shared options for commands that create a ZvecSearch instance."""
+    f = click.option("--provider", "-p", default=None, help="Embedding provider (default/openai/google).")(f)
     f = click.option("--model", "-m", default=None, help="Override embedding model.")(f)
     f = click.option("--collection", "-c", default=None, help="Zvec collection name.")(f)
     f = click.option("--zvec-path", default=None, help="Zvec database path.")(f)
@@ -112,6 +114,7 @@ def cli(ctx) -> None:
 @click.option("--force", is_flag=True, help="Re-index all files.")
 def index(
     paths: tuple[str, ...],
+    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -121,7 +124,7 @@ def index(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        model=model, collection=collection, zvec_path=zvec_path,
+        provider=provider, model=model, collection=collection, zvec_path=zvec_path,
     ))
     ms = ZvecSearch(list(paths), **_cfg_to_zvecsearch_kwargs(cfg))
     try:
@@ -143,6 +146,7 @@ def index(
 def search(
     query: str,
     top_k: int | None,
+    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -152,7 +156,7 @@ def search(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        model=model, collection=collection, zvec_path=zvec_path,
+        provider=provider, model=model, collection=collection, zvec_path=zvec_path,
     ))
     ms = ZvecSearch(**_cfg_to_zvecsearch_kwargs(cfg))
     try:
@@ -209,7 +213,8 @@ def expand(
     ))
     store = ZvecStore(**_cfg_to_store_kwargs(cfg))
     try:
-        chunks = store.query(filter_expr=f'chunk_hash == "{chunk_hash}"')
+        safe_hash = chunk_hash.replace("\\", "\\\\").replace('"', '\\"')
+        chunks = store.query(filter_expr=f'chunk_hash == "{safe_hash}"')
         if not chunks:
             click.echo(f"Chunk not found: {chunk_hash}", err=True)
             sys.exit(1)
@@ -361,6 +366,7 @@ def transcript(
 @click.option("--debounce-ms", default=None, type=int, help="Debounce delay in ms.")
 def watch(
     paths: tuple[str, ...],
+    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -370,7 +376,7 @@ def watch(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        model=model, collection=collection,
+        provider=provider, model=model, collection=collection,
         zvec_path=zvec_path, debounce_ms=debounce_ms,
     ))
     ms = ZvecSearch(list(paths), **_cfg_to_zvecsearch_kwargs(cfg))
@@ -384,6 +390,7 @@ def watch(
 
     click.echo(f"Watching {len(paths)} path(s) for changes... (Ctrl+C to stop)")
     watcher = ms.watch(on_event=_on_event, debounce_ms=cfg.watch.debounce_ms)
+    watcher.start()
     try:
         while True:
             import time
@@ -414,6 +421,7 @@ def compact(
     llm_model: str | None,
     prompt: str | None,
     prompt_file: str | None,
+    provider: str | None,
     model: str | None,
     collection: str | None,
     zvec_path: str | None,
@@ -422,7 +430,7 @@ def compact(
     from .core import ZvecSearch
 
     cfg = resolve_config(_build_cli_overrides(
-        model=model, collection=collection,
+        provider=provider, model=model, collection=collection,
         zvec_path=zvec_path, llm_provider=llm_provider,
         llm_model=llm_model, prompt_file=prompt_file,
     ))

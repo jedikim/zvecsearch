@@ -123,7 +123,7 @@ zvecsearch index ./docs/ --provider default  # 로컬 임베딩 (API 키 불필�
 
 # 시맨틱 검색
 zvecsearch search "HNSW 동작 원리"
-zvecsearch search "쿼리" --top-k 20 --json  # JSON 출력
+zvecsearch search "쿼리" --top-k 20 --json-output  # JSON 출력
 
 # 파일 변경 감시 (자동 재인덱싱)
 zvecsearch watch ./docs/
@@ -134,7 +134,7 @@ zvecsearch compact
 zvecsearch compact --source ./docs/file.md
 
 # 설정
-zvecsearch config show                       # 현재 설정 확인
+zvecsearch config list                       # 현재 설정 확인
 zvecsearch config set embedding.provider google
 zvecsearch config set embedding.model gemini-embedding-001
 zvecsearch config set search.reranker weighted

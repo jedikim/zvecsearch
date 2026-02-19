@@ -186,7 +186,9 @@ class ZvecSearch:
     ) -> str:
         """Summarize indexed chunks using an LLM. Async — LLM calls are async."""
         if source:
-            chunks = self._store.query(filter_expr=f'source == "{source}"')
+            resolved_source = str(Path(source).resolve())
+            safe_source = resolved_source.replace("\\", "\\\\").replace('"', '\\"')
+            chunks = self._store.query(filter_expr=f'source == "{safe_source}"')
         else:
             chunks = []
 
@@ -220,10 +222,15 @@ class ZvecSearch:
     ) -> FileWatcher:
         """Watch paths for markdown changes and auto-index."""
         def callback(event_type: str, path: Path) -> None:
-            if event_type in ("created", "modified"):
-                self.index_file(path)
-            elif event_type == "deleted":
-                self._store.delete_by_source(str(path))
+            try:
+                if event_type in ("created", "modified"):
+                    self.index_file(path)
+                elif event_type == "deleted":
+                    self._store.delete_by_source(str(path))
+            except FileNotFoundError:
+                logger.debug("File disappeared before indexing: %s", path)
+            except Exception:
+                logger.exception("Watch callback error for %s: %s", event_type, path)
             if on_event:
                 on_event(event_type, f"{event_type}: {path.name}", path)
 

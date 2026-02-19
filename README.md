@@ -123,7 +123,7 @@ zvecsearch index ./docs/ --provider default  # use local embedding (no API key)
 
 # Semantic search
 zvecsearch search "how does HNSW work"
-zvecsearch search "query" --top-k 20 --json  # JSON output
+zvecsearch search "query" --top-k 20 --json-output  # JSON output
 
 # Watch for changes (auto-reindex)
 zvecsearch watch ./docs/
@@ -134,7 +134,7 @@ zvecsearch compact
 zvecsearch compact --source ./docs/file.md
 
 # Configuration
-zvecsearch config show                       # show current config
+zvecsearch config list                       # show current config
 zvecsearch config set embedding.provider google
 zvecsearch config set embedding.model gemini-embedding-001
 zvecsearch config set search.reranker weighted

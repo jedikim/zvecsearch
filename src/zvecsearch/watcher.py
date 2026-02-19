@@ -73,6 +73,8 @@ class FileWatcher:
         for p in self._paths:
             if p.is_dir():
                 self._observer.schedule(self._handler, str(p), recursive=True)
+            elif p.is_file():
+                self._observer.schedule(self._handler, str(p.parent), recursive=False)
         self._observer.start()
 
     def stop(self) -> None:

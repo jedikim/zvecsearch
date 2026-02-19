@@ -86,9 +86,9 @@ _METRIC_MAP = {
 
 _QUANTIZE_MAP = {
     "none": None,
-    "int8": "INT8",
-    "int4": "INT4",
-    "fp16": "FP16",
+    "int8": zvec.QuantizeType.INT8,
+    "int4": zvec.QuantizeType.INT4,
+    "fp16": zvec.QuantizeType.FP16,
 }
 
 
@@ -300,9 +300,15 @@ class ZvecStore:
         if self._collection:
             self._collection.optimize()
 
+    @staticmethod
+    def _escape_filter_value(value: str) -> str:
+        """Escape quotes in filter values to prevent injection."""
+        return value.replace("\\", "\\\\").replace('"', '\\"')
+
     def hashes_by_source(self, source):
+        safe = self._escape_filter_value(source)
         results = self._collection.query(
-            filter=f'source == "{source}"', output_fields=["chunk_hash"],
+            filter=f'source == "{safe}"', output_fields=["chunk_hash"],
         )
         return {doc.field("chunk_hash") for doc in results}
 
@@ -317,7 +323,8 @@ class ZvecStore:
         return set(fetched.keys())
 
     def delete_by_source(self, source):
-        self._collection.delete_by_filter(f'source == "{source}"')
+        safe = self._escape_filter_value(source)
+        self._collection.delete_by_filter(f'source == "{safe}"')
 
     def delete_by_hashes(self, hashes):
         if hashes:

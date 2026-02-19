@@ -54,11 +54,18 @@ def parse_transcript(path: str | Path) -> list[Turn]:
             msg = entry.get("message", {})
             content = msg.get("content", "")
 
-            # Skip tool results — they are part of the previous assistant turn
+            # Handle list content (tool_result arrays or text blocks)
             if isinstance(content, list):
-                # Check if it's a tool_result array
                 if content and isinstance(content[0], dict) and content[0].get("type") == "tool_result":
                     continue
+                # Extract text from text blocks
+                text_parts = []
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "text":
+                        text_parts.append(block.get("text", ""))
+                    elif isinstance(block, str):
+                        text_parts.append(block)
+                content = "\n".join(text_parts)
 
             # Real user message
             if isinstance(content, str) and content.strip():
@@ -91,9 +98,9 @@ def parse_transcript(path: str | Path) -> list[Turn]:
                 if block_type == "text":
                     text = block.get("text", "").strip()
                     if text:
-                        if current_turn.role == "user":
-                            # First assistant block — create assistant section
+                        if not hasattr(current_turn, "_has_assistant") or not current_turn._has_assistant:
                             current_turn.content += f"\n\n**Assistant**: {text}"
+                            current_turn._has_assistant = True  # type: ignore[attr-defined]
                         else:
                             current_turn.content += f"\n{text}"
 

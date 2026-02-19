@@ -153,6 +153,35 @@ def get_config_value(key: str, cfg: ZvecSearchConfig | None = None) -> Any:
     return obj
 
 
+def _coerce_value(key: str, value: str) -> Any:
+    """Coerce a string value to the correct type based on the dataclass field."""
+    _SECTION_MAP = {
+        "zvec": ZvecConfig,
+        "embedding": EmbeddingConfig,
+        "search": SearchConfig,
+        "chunking": ChunkingConfig,
+        "watch": WatchConfig,
+        "compact": CompactConfig,
+    }
+    parts = key.split(".")
+    if len(parts) != 2:
+        return value
+    section, field_name = parts
+    cls = _SECTION_MAP.get(section)
+    if cls is None:
+        return value
+    for f in fields(cls):
+        if f.name == field_name:
+            if f.type in ("int", int):
+                return int(value)
+            elif f.type in ("float", float):
+                return float(value)
+            elif f.type in ("bool", bool):
+                return value.lower() in ("true", "1", "yes")
+            return value
+    return value
+
+
 def set_config_value(key: str, value: Any, project: bool = False) -> None:
     path = _PROJECT_CFG if project else _GLOBAL_CFG
     data = load_config_file(path)
@@ -160,5 +189,5 @@ def set_config_value(key: str, value: Any, project: bool = False) -> None:
     target = data
     for part in parts[:-1]:
         target = target.setdefault(part, {})
-    target[parts[-1]] = value
+    target[parts[-1]] = _coerce_value(key, value) if isinstance(value, str) else value
     save_config(data, path)

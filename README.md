@@ -1,112 +1,178 @@
 # ZvecSearch
 
-zvec(Alibaba 임베디드 벡터 데이터베이스) 기반 시맨틱 메모리 검색 시스템.
+Semantic memory search powered by [zvec](https://github.com/alibaba/zvec) (Alibaba's embedded vector database).
 
-마크다운 문서를 청킹하고 임베딩하여 하이브리드 검색(dense + sparse)을 수행한다.
+Index markdown files, embed them with OpenAI or Gemini, and perform hybrid search (dense + sparse) with no server required.
 
 > Inspired by [memsearch](https://github.com/zilliztech/memsearch) and [OpenClaw](https://github.com/openclaw/openclaw)'s markdown-first memory architecture.
 
-## 설치
+**[한국어 README](README.ko.md)**
+
+## Installation
 
 ```bash
 pip install -e ".[dev]"
 
-# Gemini 임베딩 사용 시
+# For Gemini embedding support
 pip install -e ".[google]"
 ```
 
-### 요구사항
+### Requirements
 
 - Python 3.10+
-- zvec 0.1.0+
-- OpenAI API 키 (기본 임베딩) 또는 Google API 키 (Gemini 임베딩)
+- zvec >= 0.2.0
+- `OPENAI_API_KEY` (default embedding) or `GOOGLE_API_KEY` (Gemini embedding)
 
-## 사용법
+### zvec x86_64 Build Issue
+
+The official zvec PyPI wheel is compiled with AVX-512 instructions, which causes `SIGILL` crashes on CPUs without AVX-512 support (most AMD CPUs, older Intel CPUs, and many VMs). See [alibaba/zvec#128](https://github.com/alibaba/zvec/issues/128).
+
+A pre-built wheel compiled with `-march=x86-64-v2` (SSE4.2, compatible with most x86_64 systems) is included in the `dist/` directory:
+
+```bash
+pip install dist/zvec-0.2.1.dev0-cp312-cp312-linux_x86_64.whl
+```
+
+## Quick Start
+
+### 3 Lines to Search
+
+```python
+from zvecsearch import ZvecSearch
+
+zs = ZvecSearch(paths=["./docs"])
+zs.index()                                    # index markdown files
+results = zs.search("HNSW algorithm", top_k=5)  # semantic search
+```
 
 ### CLI
 
 ```bash
-# 마크다운 파일 인덱싱
-zvecsearch index ./docs/
-
-# 시맨틱 검색
-zvecsearch search "벡터 검색 원리"
-
-# 파일 변경 감시 (자동 재인덱싱)
-zvecsearch watch ./docs/
-
-# 인덱스 최적화 (컴팩션)
-zvecsearch compact
-
-# 설정 확인/변경
-zvecsearch config show
-zvecsearch config set embedding.provider google
-zvecsearch config set embedding.model gemini-embedding-001
+zvecsearch index ./docs/           # index markdown files
+zvecsearch search "HNSW algorithm" # semantic search
+zvecsearch watch ./docs/           # watch for changes, auto-reindex
+zvecsearch compact                 # LLM-based chunk summarization
 ```
+
+## Usage
 
 ### Python API
 
 ```python
 from zvecsearch import ZvecSearch
 
-zs = ZvecSearch()
+# Initialize with custom settings
+zs = ZvecSearch(
+    paths=["./docs", "./notes"],
+    embedding_provider="openai",        # "openai" or "google"
+    embedding_model="text-embedding-3-small",
+    quantize_type="int8",               # "int8", "int4", "fp16", "none"
+    reranker="rrf",                     # "rrf" or "weighted"
+)
 
-# 인덱싱
-zs.index("./docs/")
+# Index all markdown files (incremental - only changed chunks are re-embedded)
+zs.index()
 
-# 검색
-results = zs.search("HNSW 알고리즘이란?", top_k=5)
+# Force full re-index
+zs.index(force=True)
+
+# Index a single file
+zs.index_file("./docs/new-note.md")
+
+# Search
+results = zs.search("vector similarity search", top_k=10)
 for r in results:
-    print(f"[{r['score']:.4f}] {r['source']}:{r['start_line']}")
-    print(f"  {r['content'][:80]}...")
+    print(f"[{r['score']:.4f}] {r['source']}:{r['start_line']}-{r['end_line']}")
+    print(f"  Heading: {r['heading']}")
+    print(f"  {r['content'][:100]}...")
+    print()
+
+# Watch for file changes (auto-reindex on create/modify/delete)
+watcher = zs.watch(debounce_ms=1500)
+watcher.start()
+# ... watcher runs in background ...
+watcher.stop()
+
+# LLM-based chunk summarization (async)
+import asyncio
+summary = asyncio.run(zs.compact(
+    source="./docs/long-document.md",
+    llm_provider="openai",
+    output_dir="./output",
+))
+
+# Context manager support
+with ZvecSearch(paths=["./docs"]) as zs:
+    zs.index()
+    results = zs.search("query")
 ```
 
-### 설정
+### CLI Commands
 
-`~/.zvecsearch/config.toml` (글로벌) 또는 `.zvecsearch.toml` (프로젝트)에서 설정:
+```bash
+# Index markdown files in one or more directories
+zvecsearch index ./docs/
+zvecsearch index ./docs/ ./notes/ --force    # force full re-index
+zvecsearch index ./docs/ --provider google   # use Gemini embedding
+
+# Semantic search
+zvecsearch search "how does HNSW work"
+zvecsearch search "query" --top-k 20 --json  # JSON output
+
+# Watch for changes (auto-reindex)
+zvecsearch watch ./docs/
+zvecsearch watch ./docs/ --debounce-ms 3000
+
+# LLM summarization
+zvecsearch compact
+zvecsearch compact --source ./docs/file.md
+
+# Configuration
+zvecsearch config show                       # show current config
+zvecsearch config set embedding.provider google
+zvecsearch config set embedding.model gemini-embedding-001
+zvecsearch config set search.reranker weighted
+zvecsearch config set zvec.quantize_type int4
+```
+
+### Configuration
+
+Settings are resolved in priority order: **defaults** < **global config** < **project config** < **CLI flags**.
+
+Global config: `~/.zvecsearch/config.toml`
+Project config: `.zvecsearch.toml`
 
 ```toml
 [zvec]
-path = "~/.zvecsearch/db"
-collection = "zvecsearch_chunks"
-hnsw_m = 16
-hnsw_ef = 300
-quantize_type = "int8"
+path = "~/.zvecsearch/db"          # database storage path
+collection = "zvecsearch_chunks"   # collection name
+enable_mmap = true                 # memory-mapped I/O
+hnsw_m = 16                        # HNSW max connections per node
+hnsw_ef = 300                      # HNSW ef_construction
+quantize_type = "int8"             # "int8", "int4", "fp16", "none"
 
 [embedding]
-provider = "openai"          # "openai" 또는 "google"
-model = "text-embedding-3-small"  # 또는 "gemini-embedding-001"
+provider = "openai"                # "openai" or "google"
+model = "text-embedding-3-small"   # or "gemini-embedding-001"
 
 [search]
 top_k = 10
-reranker = "rrf"             # "rrf" 또는 "weighted"
-dense_weight = 1.0
-sparse_weight = 0.8
+query_ef = 300                     # HNSW search-time ef
+reranker = "rrf"                   # "rrf" or "weighted"
+dense_weight = 1.0                 # for weighted reranker
+sparse_weight = 0.8                # for weighted reranker
+
+[chunking]
+max_chunk_size = 1500
+overlap_lines = 2
+
+[watch]
+debounce_ms = 1500
 ```
 
-## 프로젝트 구조
+## Architecture
 
-```
-zvecsearch/
-├── src/zvecsearch/
-│   ├── core.py        # ZvecSearch 오케스트레이터 (index/search/compact/watch)
-│   ├── store.py       # ZvecStore — zvec Collection 래퍼 + GeminiDenseEmbedding
-│   ├── chunker.py     # 마크다운 청킹 (헤딩 기반 분할)
-│   ├── scanner.py     # .md/.markdown 파일 탐색
-│   ├── watcher.py     # 파일 변경 감시 (watchdog, 디바운스)
-│   ├── config.py      # TOML 설정 (글로벌/프로젝트 레이어)
-│   ├── compact.py     # LLM 기반 청크 요약 (비동기)
-│   ├── cli.py         # Click CLI 인터페이스
-│   └── transcript.py  # 트랜스크립트 유틸리티
-├── tests/             # pytest 테스트 (345개)
-├── benchmarks/        # 5-Phase 벤치마크 (280개)
-├── scripts/           # 실제 API 테스트 스크립트
-└── pyproject.toml
-```
-
-## 아키텍처
-
-### 하이브리드 검색
+### Hybrid Search
 
 ```
 Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
@@ -115,68 +181,113 @@ Query -> +-- Dense embedding (OpenAI/Gemini) -> HNSW cosine search --+
                                                                RRF ReRanker -> Results
 ```
 
-- **Dense 벡터**: OpenAI `text-embedding-3-small` (1536차원) 또는 Gemini `gemini-embedding-001` (768차원)
-- **Sparse 벡터**: zvec 네이티브 `BM25EmbeddingFunction` (document/query 분리)
-- **리랭킹**: `RrfReRanker` (기본, rank_constant=60) 또는 `WeightedReRanker`
-- **양자화**: INT8 (기본), INT4, FP16 지원 — 메모리 절감
+Every query runs **two parallel searches**:
 
-### zvec 네이티브 스토리지
+1. **Dense search**: Query text is embedded (OpenAI or Gemini), then searched against HNSW index using cosine similarity.
+2. **Sparse search**: BM25 keyword matching via zvec's native `BM25EmbeddingFunction`.
 
-서버 없이 파일 기반으로 동작하는 임베디드 벡터 DB:
+Results are fused by **RRF ReRanker** (default) or **Weighted ReRanker**, producing a single ranked list.
 
-- HNSW 인덱스 (M=16, ef_construction=300)
-- 코사인 유사도 메트릭
-- mmap 지원으로 대용량 인덱스 효율적 로딩
-- 증분 인덱싱: chunk_hash 기반으로 변경분만 재임베딩 → API 비용 절감
+### Embedding Providers
 
-### 임베딩 프로바이더
-
-| 프로바이더 | 모델 | 차원 | 설정 |
-|-----------|------|------|------|
-| OpenAI | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
+| Provider | Model | Dimensions | Env Variable |
+|----------|-------|-----------|--------------|
+| OpenAI (default) | text-embedding-3-small | 1536 | `OPENAI_API_KEY` |
 | Gemini | gemini-embedding-001 | 768 | `GOOGLE_API_KEY` |
 
-Gemini는 zvec의 `DenseEmbeddingFunction` Protocol을 구현한 커스텀 클래스(`GeminiDenseEmbedding`)로 지원된다.
+OpenAI embedding is provided by zvec's native `OpenAIDenseEmbedding`. Gemini is implemented as a custom `GeminiDenseEmbedding` class that conforms to zvec's `DenseEmbeddingFunction` Protocol.
 
-### 마크다운 청킹
+### Rerankers
 
-- 헤딩(`#`, `##`, ...) 기반으로 문서를 의미 단위로 분할
-- 각 청크에 source, heading, heading_level, start_line, end_line 메타데이터 부착
-- SHA-256 chunk_hash로 중복/변경 감지
+| Reranker | Method | Description |
+|----------|--------|-------------|
+| **RRF** (default) | Rank fusion | Combines results by rank position. No tuning needed. |
+| **Weighted** | Score fusion | Weighted sum of dense/sparse scores. Configurable weights. |
 
-## 테스트
+zvec also supports cross-encoder rerankers (`QwenReRanker`, `DefaultLocalReRanker`) for higher accuracy at the cost of speed, but these are not yet wired into zvecsearch.
+
+### Storage
+
+zvec is an **embedded** vector database — no server process needed.
+
+- File-based storage at `~/.zvecsearch/db/` (configurable)
+- HNSW index with COSINE metric (M=16, ef_construction=300)
+- INT8 quantization by default (also supports INT4, FP16)
+- Memory-mapped I/O for efficient large index loading
+- Apache Arrow + RocksDB storage backend
+
+### Incremental Indexing
+
+Only changed content is re-embedded, saving API costs:
+
+1. Each chunk gets a SHA-256 `chunk_hash` based on content, source, and line range
+2. On re-index, existing hashes are compared — unchanged chunks are skipped
+3. Stale chunks (deleted/modified content) are automatically removed
+
+### Markdown Chunking
+
+- Splits documents by headings (`#`, `##`, `###`, etc.)
+- Each chunk carries metadata: `source`, `heading`, `heading_level`, `start_line`, `end_line`
+- Configurable `max_chunk_size` with `overlap_lines` for context continuity
+
+## Project Structure
+
+```
+zvecsearch/
+├── src/zvecsearch/
+│   ├── core.py        # ZvecSearch orchestrator (sync index/search/watch, async compact)
+│   ├── store.py       # ZvecStore (zvec Collection wrapper + GeminiDenseEmbedding)
+│   ├── chunker.py     # Markdown chunking (heading-based splitting)
+│   ├── scanner.py     # File discovery (.md/.markdown)
+│   ├── watcher.py     # File system monitoring (watchdog, debounce)
+│   ├── config.py      # TOML config (global/project layered resolution)
+│   ├── compact.py     # LLM-based chunk summarization (async)
+│   ├── cli.py         # Click CLI interface
+│   └── transcript.py  # Transcript utilities
+├── tests/             # pytest unit tests (283)
+├── benchmarks/        # 5-phase benchmarks (62)
+├── scripts/           # Real API embedding test scripts
+├── dist/              # Pre-built zvec wheel (x86-64-v2)
+└── pyproject.toml
+```
+
+## Testing
 
 ```bash
-# 전체 테스트 (345개)
+# Unit tests (283 tests)
 pytest tests/ -v
 
-# 벤치마크 (280개, API 키 불필요)
+# Benchmarks (62 tests, no API key needed for Phase 1-4)
 pytest benchmarks/ -v
 
-# 실제 임베딩 벤치마크 (API 키 필요)
+# Phase 5: real embedding comparison (requires API keys)
 OPENAI_API_KEY=... GOOGLE_API_KEY=... pytest benchmarks/test_phase5_embeddings.py -v -s
 
-# 린트
+# Real API embedding scripts
+OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_gemini_embedding.py
+OPENAI_API_KEY=... GOOGLE_API_KEY=... python scripts/test_zvecsearch_gemini.py
+
+# Lint
 ruff check src/ tests/ benchmarks/
 ```
 
-### 벤치마크 결과 요약
+### Benchmark Results
 
-| Phase | 항목 | 결과 |
-|-------|------|------|
+| Phase | Metric | Result |
+|-------|--------|--------|
 | Phase 2 | Recall@5 | 0.8250 |
 | Phase 2 | MRR | 0.8083 |
 | Phase 2 | NDCG@5 | 0.7849 |
 | Phase 3 | Faithfulness | 0.8667 |
 | Phase 3 | Context Relevance | 0.7000 |
-| Phase 4 | Chunking 처리량 | 42K docs/s |
-| Phase 4 | 검색 QPS | 12K QPS |
+| Phase 4 | Chunking throughput | 42K docs/s |
+| Phase 4 | Search QPS | 12K QPS |
 | Phase 5 | Gemini Recall@5 | 1.0000 |
 | Phase 5 | OpenAI Recall@5 | 1.0000 |
 | Phase 5 | Keyword Recall@5 | 0.9333 |
 
-시맨틱 쿼리(동의어/패러프레이즈)에서 임베딩 검색이 키워드 검색 대비 확실한 우위를 보인다.
+Embedding-based search significantly outperforms keyword search on semantic queries (synonyms, paraphrases, cross-lingual).
 
-## 라이선스
+## License
 
 MIT
